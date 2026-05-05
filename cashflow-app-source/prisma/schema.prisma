@@ -1,0 +1,328 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model cash_lunak {
+  id                 Int                  @id @default(autoincrement())
+  nama_user          String               @db.VarChar(100)
+  no_hp              String?              @db.VarChar(20)
+  alamat             String?              @db.Text
+  blok               String?              @db.VarChar(20)
+  harga_total        Decimal              @db.Decimal(15, 2)
+  tanggal_dp         DateTime             @db.Date
+  jumlah_dp          Decimal              @db.Decimal(15, 2)
+  tenor              Int
+  cicilan_per_bulan  Decimal              @db.Decimal(15, 2)
+  bukti_dp           String?              @db.VarChar(255)
+  keterangan         String?              @db.Text
+  created_by         Int?
+  created_at         DateTime?            @default(now()) @db.Timestamp(0)
+  updated_at         DateTime?            @default(now()) @db.Timestamp(0)
+  users              users?               @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_cashlunak_user")
+  cash_lunak_history cash_lunak_history[]
+
+  @@index([blok], map: "idx_blok")
+  @@index([created_by], map: "idx_created_by")
+  @@index([nama_user], map: "idx_nama")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model cash_lunak_history {
+  id            Int                       @id @default(autoincrement())
+  cash_lunak_id Int
+  tanggal_bayar DateTime                  @db.Date
+  cicilan_ke    Int                       @default(1)
+  jenis         cash_lunak_history_jenis? @default(cicilan)
+  jumlah        Decimal                   @db.Decimal(15, 2)
+  metode        String?                   @db.VarChar(50)
+  bukti         String?                   @db.VarChar(255)
+  keterangan    String?                   @db.Text
+  created_at    DateTime?                 @default(now()) @db.Timestamp(0)
+  cash_lunak    cash_lunak                @relation(fields: [cash_lunak_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_history_cashlunak")
+
+  @@index([cash_lunak_id], map: "idx_cash_lunak")
+  @@index([tanggal_bayar], map: "idx_tanggal")
+}
+
+model data_akad {
+  id           Int                    @id @default(autoincrement())
+  tanggal_akad DateTime               @db.Date
+  nama_user    String                 @db.VarChar(100)
+  blok         String                 @db.VarChar(20)
+  bank         String                 @db.VarChar(50)
+  nominal      Decimal?               @default(0.00) @db.Decimal(15, 2)
+  status_cair  data_akad_status_cair? @default(belum_cair)
+  tanggal_cair DateTime?              @db.Date
+  keterangan   String?                @db.Text
+  created_by   Int?
+  created_at   DateTime?              @default(now()) @db.Timestamp(0)
+  updated_at   DateTime?              @default(now()) @db.Timestamp(0)
+  users        users?                 @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_akad_user")
+
+  @@index([bank], map: "idx_bank")
+  @@index([blok], map: "idx_blok")
+  @@index([created_by], map: "idx_created_by")
+  @@index([status_cair], map: "idx_status")
+  @@index([tanggal_akad], map: "idx_tanggal")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model data_siswa {
+  id              Int                      @id @default(autoincrement())
+  nis             String                   @unique(map: "uk_nis") @db.VarChar(20)
+  nama_siswa      String                   @db.VarChar(100)
+  tempat_lahir    String?                  @db.VarChar(50)
+  tanggal_lahir   DateTime?                @db.Date
+  jenis_kelamin   data_siswa_jenis_kelamin
+  alamat          String?                  @db.Text
+  kelas           String                   @db.VarChar(30)
+  tahun_ajaran    String                   @db.VarChar(10)
+  nama_wali       String?                  @db.VarChar(100)
+  no_hp_wali      String?                  @db.VarChar(20)
+  pekerjaan_wali  String?                  @db.VarChar(100)
+  status          data_siswa_status?       @default(aktif)
+  foto            String?                  @db.VarChar(255)
+  keterangan      String?                  @db.Text
+  created_at      DateTime?                @default(now()) @db.Timestamp(0)
+  updated_at      DateTime?                @default(now()) @db.Timestamp(0)
+  transaksi_siswa transaksi_siswa[]
+
+  @@index([kelas, tahun_ajaran], map: "idx_kelas_tahun")
+  @@index([nama_siswa], map: "idx_nama")
+  @@index([status], map: "idx_status")
+}
+
+model hak_akses {
+  id           Int       @id @default(autoincrement())
+  role         String    @db.VarChar(50)
+  halaman      String    @db.VarChar(50)
+  dapat_lihat  Boolean?  @default(false)
+  dapat_tambah Boolean?  @default(false)
+  dapat_edit   Boolean?  @default(false)
+  dapat_hapus  Boolean?  @default(false)
+  dapat_ekspor Boolean?  @default(false)
+  created_at   DateTime? @default(now()) @db.Timestamp(0)
+
+  @@unique([role, halaman], map: "uk_role_halaman")
+  @@index([role], map: "idx_role")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model log_aktivitas {
+  id         Int       @id @default(autoincrement())
+  user_id    Int?
+  aksi       String    @db.VarChar(50)
+  modul      String?   @db.VarChar(50)
+  deskripsi  String?   @db.Text
+  ip_address String?   @db.VarChar(45)
+  user_agent String?   @db.VarChar(255)
+  created_at DateTime? @default(now()) @db.Timestamp(0)
+  users      users?    @relation(fields: [user_id], references: [id], onUpdate: NoAction, map: "fk_log_user")
+
+  @@index([aksi], map: "idx_aksi")
+  @@index([created_at], map: "idx_created")
+  @@index([user_id], map: "idx_user")
+}
+
+model pengaturan_aplikasi {
+  id            Int       @id @default(autoincrement())
+  key_setting   String    @unique(map: "uk_key") @db.VarChar(50)
+  value_setting String?   @db.Text
+  deskripsi     String?   @db.VarChar(255)
+  updated_at    DateTime? @default(now()) @db.Timestamp(0)
+}
+
+model progres_tukang {
+  id                     Int                      @id @default(autoincrement())
+  nama_tukang            String                   @db.VarChar(100)
+  lokasi                 String                   @db.VarChar(100)
+  total_kontrak          Decimal                  @db.Decimal(15, 2)
+  tanggal_mulai          DateTime                 @db.Date
+  tanggal_target_selesai DateTime?                @db.Date
+  selesai_persen         Int?                     @default(0)
+  status                 progres_tukang_status?   @default(belum_mulai)
+  keterangan             String?                  @db.Text
+  created_by             Int?
+  created_at             DateTime?                @default(now()) @db.Timestamp(0)
+  updated_at             DateTime?                @default(now()) @db.Timestamp(0)
+  users                  users?                   @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_tukang_user")
+  progres_tukang_history progres_tukang_history[]
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([lokasi], map: "idx_lokasi")
+  @@index([nama_tukang], map: "idx_nama_tukang")
+  @@index([status], map: "idx_status")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model progres_tukang_history {
+  id             Int            @id @default(autoincrement())
+  tukang_id      Int
+  tanggal_bayar  DateTime       @db.Date
+  jumlah         Decimal        @db.Decimal(15, 2)
+  blok           String?        @db.VarChar(20)
+  bukti          String?        @db.VarChar(255)
+  keterangan     String?        @db.Text
+  created_at     DateTime?      @default(now()) @db.Timestamp(0)
+  progres_tukang progres_tukang @relation(fields: [tukang_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_history_tukang")
+
+  @@index([tanggal_bayar], map: "idx_tanggal")
+  @@index([tukang_id], map: "idx_tukang")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model saldo_awal_divisi {
+  id         Int       @id @default(autoincrement())
+  divisi     String    @unique(map: "uk_divisi") @db.VarChar(30)
+  saldo_awal Decimal?  @default(0.00) @db.Decimal(15, 2)
+  modal_awal Decimal?  @default(0.00) @db.Decimal(15, 2)
+  keterangan String?   @db.Text
+  updated_at DateTime? @default(now()) @db.Timestamp(0)
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model transaksi_cashflow {
+  id          Int                       @id @default(autoincrement())
+  divisi      transaksi_cashflow_divisi
+  tanggal     DateTime                  @db.Date
+  uraian      String                    @db.VarChar(255)
+  rencana     Decimal?                  @default(0.00) @db.Decimal(15, 2)
+  uang_masuk  Decimal?                  @default(0.00) @db.Decimal(15, 2)
+  uang_keluar Decimal?                  @default(0.00) @db.Decimal(15, 2)
+  keterangan  String?                   @db.Text
+  nota_file   String?                   @db.VarChar(255)
+  nota_tipe   String?                   @db.VarChar(50)
+  created_by  Int?
+  created_at  DateTime?                 @default(now()) @db.Timestamp(0)
+  updated_at  DateTime?                 @default(now()) @db.Timestamp(0)
+  users       users?                    @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_cashflow_user")
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([divisi, tanggal], map: "idx_divisi_tanggal")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model transaksi_siswa {
+  id                Int                              @id @default(autoincrement())
+  siswa_id          Int
+  tanggal_transaksi DateTime                         @db.Date
+  jenis_pembayaran  transaksi_siswa_jenis_pembayaran
+  periode_label     String                           @db.VarChar(50)
+  periode_bulan     String?                          @db.VarChar(20)
+  periode_tahun     String?                          @db.VarChar(10)
+  tagihan           Decimal                          @db.Decimal(15, 2)
+  jumlah_dibayar    Decimal                          @db.Decimal(15, 2)
+  metode            String?                          @db.VarChar(50)
+  bukti             String?                          @db.VarChar(255)
+  keterangan        String?                          @db.Text
+  created_by        Int?
+  created_at        DateTime?                        @default(now()) @db.Timestamp(0)
+  updated_at        DateTime?                        @default(now()) @db.Timestamp(0)
+  data_siswa        data_siswa                       @relation(fields: [siswa_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_transaksi_siswa")
+  users             users?                           @relation(fields: [created_by], references: [id], onUpdate: NoAction, map: "fk_transaksi_user")
+
+  @@index([created_by], map: "idx_created_by")
+  @@index([jenis_pembayaran], map: "idx_jenis")
+  @@index([periode_tahun, periode_bulan], map: "idx_periode")
+  @@index([siswa_id], map: "idx_siswa")
+  @@index([tanggal_transaksi], map: "idx_tanggal")
+}
+
+/// This model or at least one of its fields has comments in the database, and requires an additional setup for migrations: Read more: https://pris.ly/d/database-comments
+model users {
+  id                 Int                  @id @default(autoincrement())
+  username           String               @unique(map: "uk_username") @db.VarChar(50)
+  password           String               @db.VarChar(255)
+  nama_lengkap       String               @db.VarChar(100)
+  email              String?              @db.VarChar(100)
+  no_hp              String?              @db.VarChar(20)
+  role               users_role
+  divisi_akses       String?              @db.VarChar(50)
+  status             users_status?        @default(aktif)
+  foto               String?              @db.VarChar(255)
+  last_login         DateTime?            @db.DateTime(0)
+  created_at         DateTime?            @default(now()) @db.Timestamp(0)
+  updated_at         DateTime?            @default(now()) @db.Timestamp(0)
+  cash_lunak         cash_lunak[]
+  data_akad          data_akad[]
+  log_aktivitas      log_aktivitas[]
+  progres_tukang     progres_tukang[]
+  transaksi_cashflow transaksi_cashflow[]
+  transaksi_siswa    transaksi_siswa[]
+
+  @@index([role], map: "idx_role")
+  @@index([status], map: "idx_status")
+}
+
+enum transaksi_cashflow_divisi {
+  bakso
+  amanah
+  batualam
+  kembang
+  perumahan
+  tkyaris
+}
+
+enum transaksi_siswa_jenis_pembayaran {
+  spp
+  infaq
+  seragam
+  iuran_wisuda
+  iuran_buku
+  iuran_tahunan
+  pendaftaran
+  lain
+}
+
+enum cash_lunak_history_jenis {
+  dp
+  cicilan
+  pelunasan
+  lain
+}
+
+enum data_siswa_jenis_kelamin {
+  L
+  P
+}
+
+enum data_akad_status_cair {
+  cair
+  belum_cair
+}
+
+enum users_role {
+  admin
+  owner
+  staff_bakso
+  staff_amanah
+  staff_batualam
+  staff_kembang
+  staff_perumahan
+  staff_tkyaris
+}
+
+enum progres_tukang_status {
+  belum_mulai
+  berjalan
+  selesai
+  tertunda
+}
+
+enum users_status {
+  aktif
+  nonaktif
+}
+
+enum data_siswa_status {
+  aktif
+  lulus
+  pindah
+  nonaktif
+}
