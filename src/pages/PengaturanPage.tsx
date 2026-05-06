@@ -74,14 +74,21 @@ export default function PengaturanPage() {
 
   const handleOpenEdit = (u: User) => {
     setEditId(u.id);
-    setForm({ namaLengkap: u.namaLengkap, username: u.username, password: u.password, role: u.role, status: u.status });
+    // Jangan tampilkan hash password — kosongkan agar admin tahu harus isi ulang jika ingin mengubah
+    setForm({ namaLengkap: u.namaLengkap, username: u.username, password: "", role: u.role, status: u.status });
     setShowPassword(false);
     setShowModal(true);
   };
 
   const handleSaveUser = () => {
-    if (!form.namaLengkap || !form.username || !form.password) {
-      showToast("Semua field wajib diisi.", "error"); return;
+    if (!form.namaLengkap.trim() || !form.username.trim()) {
+      showToast("Nama lengkap dan username wajib diisi.", "error"); return;
+    }
+    if (!editId && !form.password) {
+      showToast("Password wajib diisi untuk pengguna baru.", "error"); return;
+    }
+    if (form.password && form.password.length < 6) {
+      showToast("Password minimal 6 karakter.", "error"); return;
     }
     const all = getUsers();
     const dup = all.find(u => u.username === form.username && u.id !== editId);
@@ -89,12 +96,15 @@ export default function PengaturanPage() {
 
     if (editId) {
       const existing = all.find(u => u.id === editId);
-      // Admin can't change owner's role
       if (user?.role === "admin" && existing?.role === "owner" && form.role !== "owner") {
         showToast("Anda tidak bisa mengubah role Owner.", "error"); return;
       }
       const idx = all.findIndex(u => u.id === editId);
-      if (idx >= 0) all[idx] = { ...all[idx], ...form };
+      if (idx >= 0) {
+        // Hanya update password jika admin mengisi field baru; jika kosong, pertahankan password lama
+        const updatedPassword = form.password ? form.password : all[idx].password;
+        all[idx] = { ...all[idx], namaLengkap: form.namaLengkap, username: form.username, role: form.role, status: form.status, password: updatedPassword };
+      }
     } else {
       all.push({ id: generateId(), ...form });
     }
@@ -304,11 +314,13 @@ export default function PengaturanPage() {
                   style={{ borderColor: "hsl(var(--border))" }} data-testid="input-user-username" />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1.5">Password *</label>
+                <label className="block text-xs font-medium text-foreground mb-1.5">
+                  Password {editId ? <span className="text-muted-foreground font-normal">(kosongkan jika tidak ingin diubah)</span> : "*"}
+                </label>
                 <div className="relative">
                   <input type={showPassword ? "text" : "password"} value={form.password}
                     onChange={e => setForm(f => ({ ...f, password: e.target.value }))}
-                    placeholder="Password"
+                    placeholder={editId ? "Isi untuk mengganti password" : "Minimal 6 karakter"}
                     className="w-full px-3 py-2 pr-10 rounded-xl border text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                     style={{ borderColor: "hsl(var(--border))" }} data-testid="input-user-password" />
                   <button type="button" onClick={() => setShowPassword(!showPassword)}

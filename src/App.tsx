@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useParams } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import AppLayout from "@/components/AppLayout";
@@ -58,7 +58,11 @@ function AppRoutes() {
           const access = hasAccess("dashboard");
           return access !== "NONE" ? <DashboardPage /> : <AccessDenied />;
         }} />
-        <Route path="/divisi/:divisi" component={() => <DivisiPage />} />
+        <Route path="/divisi/:divisi" component={() => {
+          const params = useParams<{ divisi: string }>();
+          const access = hasAccess(params.divisi ?? "");
+          return access !== "NONE" ? <DivisiPage /> : <AccessDenied />;
+        }} />
         <Route path="/laporan" component={() => {
           const access = hasAccess("laporan");
           return access !== "NONE" ? <LaporanPage /> : <AccessDenied />;
@@ -67,7 +71,10 @@ function AppRoutes() {
           const access = hasAccess("pengaturan");
           return access !== "NONE" ? <PengaturanPage /> : <AccessDenied />;
         }} />
-        <Route path="/data-akad" component={() => <DataAkadPage />} />
+        <Route path="/data-akad" component={() => {
+          const access = hasAccess("akad");
+          return access !== "NONE" ? <DataAkadPage /> : <AccessDenied />;
+        }} />
         <Route path="/cash-lunak" component={() => {
           const access = hasAccess("cashlunak");
           return access !== "NONE" ? <CashLunakPage /> : <AccessDenied />;

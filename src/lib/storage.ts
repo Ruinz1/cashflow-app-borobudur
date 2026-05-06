@@ -7,6 +7,12 @@ export interface User {
   status: "aktif" | "nonaktif";
 }
 
+export interface NotaItem {
+  nama: string;
+  tipe: string;
+  data: string;
+}
+
 export interface Transaksi {
   id: string;
   tanggal: string;
@@ -16,11 +22,9 @@ export interface Transaksi {
   uang_keluar: number;
   saldo_akhir: number;
   keterangan: string;
-  nota?: {
-    nama: string;
-    tipe: string;
-    data: string;
-  } | null;
+  /** @deprecated gunakan `notas` — disimpan untuk backward compat */
+  nota?: NotaItem | null;
+  notas?: NotaItem[];
 }
 
 export interface SaldoAwal {
@@ -1180,4 +1184,19 @@ export function bulkSyncImportedRowsToCashflow(
     else { gagal++; errors.push({ id, reason: res.reason || "Unknown" }); }
   }
   return { berhasil, gagal, errors };
+}
+
+// ───────────────────── Session Token ─────────────────────────
+const TOKEN_KEY = "cashflow_token";
+
+export function getSessionToken(): string | null {
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+export function saveSessionToken(token: string): void {
+  sessionStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearSessionToken(): void {
+  sessionStorage.removeItem(TOKEN_KEY);
 }

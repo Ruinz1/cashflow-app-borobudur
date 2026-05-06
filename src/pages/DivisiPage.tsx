@@ -3,7 +3,7 @@ import { useParams, Link } from "wouter";
 import {
   getTransaksi, saveTransaksi, getSaldoAwal, saveSaldoAwal,
   recalculateSaldo, generateId, formatRupiah, formatDate,
-  DIVISI_CONFIG, DivisiKey, Transaksi, getStorageUsagePercent, getStorageUsageMB,
+  DIVISI_CONFIG, DivisiKey, Transaksi, NotaItem, getStorageUsagePercent, getStorageUsageMB,
   getSaldoAwalDivisi, getSaldoAdmSiswaSummary, SALDO_ADMSISWA_EVENT, SaldoAdmSiswaSummary,
   getSaldoManualEntries, tambahSaldoManual, updateSaldoManual, hapusSaldoManual, SaldoManualEntry,
 } from "@/lib/storage";
@@ -11,11 +11,12 @@ import { useAuth } from "@/contexts/AuthContext";
 import { exportToPDF, exportToExcel } from "@/lib/exportUtils";
 import {
   Plus, Pencil, Trash2, Download, FileText, Printer,
-  Upload, Eye, AlertCircle, TrendingUp, TrendingDown, Wallet, FileSpreadsheet,
+  Eye, AlertCircle, TrendingUp, TrendingDown, Wallet, FileSpreadsheet,
   Receipt, RefreshCw, Users, PlusCircle, X, Settings, UploadCloud,
 } from "lucide-react";
 import ImportDokumenModal from "@/components/ImportDokumenModal";
 import ImportDokumenSection from "@/components/ImportDokumenSection";
+import NotaUploader from "@/components/NotaUploader";
 
 const MONTHS = [
   { val: "", label: "Semua Bulan" },
@@ -32,7 +33,7 @@ function generateYears() {
   return [{ val: "", label: "Semua Tahun" }, ...Array.from({ length: 5 }, (_, i) => ({ val: String(now - i), label: String(now - i) }))];
 }
 
-const EMPTY_FORM = { tanggal: "", uraian: "", rencana: 0, uang_masuk: 0, uang_keluar: 0, keterangan: "", nota: null as null | { nama: string; tipe: string; data: string } };
+const EMPTY_FORM = { tanggal: "", uraian: "", rencana: 0, uang_masuk: 0, uang_keluar: 0, keterangan: "", nota: null as null | NotaItem, notas: [] as NotaItem[] };
 
 function ConfirmDialog({ message, onConfirm, onCancel }: { message: string; onConfirm: () => void; onCancel: () => void }) {
   return (
@@ -79,7 +80,6 @@ export default function DivisiPage() {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const [refresh, setRefresh] = useState(0);
-  const [notaError, setNotaError] = useState("");
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
@@ -208,12 +208,12 @@ export default function DivisiPage() {
   const handleOpenAdd = () => {
     setEditId(null);
     setForm({ ...EMPTY_FORM, tanggal: new Date().toISOString().split("T")[0] });
-    setNotaError("");
     setShowModal(true);
   };
 
   const handleOpenEdit = (t: Transaksi) => {
     setEditId(t.id);
+    const notas = t.notas && t.notas.length > 0 ? t.notas : (t.nota ? [t.nota] : []);
     setForm({
       tanggal: t.tanggal,
       uraian: t.uraian,
@@ -221,9 +221,9 @@ export default function DivisiPage() {
       uang_masuk: t.uang_masuk,
       uang_keluar: t.uang_keluar,
       keterangan: t.keterangan,
-      nota: t.nota || null,
+      nota: notas[0] || null,
+      notas,
     });
-    setNotaError("");
     setShowModal(true);
   };
 
@@ -278,22 +278,8 @@ export default function DivisiPage() {
     showToast("Transaksi berhasil dihapus.");
   };
 
-  const handleNotaUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const maxSize = 2 * 1024 * 1024;
-    if (file.size > maxSize) { setNotaError("File terlalu besar. Maksimal 2MB."); return; }
-    const allowed = ["application/pdf", "image/jpeg", "image/jpg", "image/png"];
-    if (!allowed.includes(file.type)) { setNotaError("Format tidak didukung. Gunakan PDF, JPG, atau PNG."); return; }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setForm(f => ({ ...f, nota: { nama: file.name, tipe: file.type, data: reader.result as string } }));
-      setNotaError("");
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleViewNota = (nota: { nama: string; tipe: string; data: string }) => {
+  const handleViewNota = (nota: NotaItem) => {
+    if (!nota.data) return;
     if (nota.tipe.startsWith("image/")) {
       const win = window.open();
       win?.document.write(`<img src="${nota.data}" style="max-width:100%;"/>`);
@@ -787,18 +773,22 @@ export default function DivisiPage() {
                     </td>
                     <td className="px-3 py-2.5 text-muted-foreground text-xs max-w-[120px] truncate" title={t.keterangan}>{t.keterangan || "-"}</td>
                     <td className="px-3 py-2.5">
-                      {t.nota ? (
-                        <div className="flex gap-1">
-                          <button onClick={() => handleViewNota(t.nota!)} className="p-1 rounded-lg hover:bg-blue-100 text-blue-500" title="Lihat nota">
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => handleViewNota(t.nota!)} className="p-1 rounded-lg hover:bg-green-100 text-green-600" title="Unduh nota">
-                            <Download className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
+                      {(() => {
+                        const notaList = (t.notas && t.notas.length > 0) ? t.notas : (t.nota ? [t.nota] : []);
+                        if (!notaList.length) return <span className="text-muted-foreground text-xs">-</span>;
+                        return (
+                          <div className="flex flex-col gap-1">
+                            {notaList.map((n, i) => (
+                              <button key={i} onClick={() => handleViewNota(n)} disabled={!n.data}
+                                className="flex items-center gap-1 text-xs text-blue-500 hover:underline disabled:opacity-40 disabled:no-underline text-left"
+                                title={n.nama}>
+                                <Eye className="w-3 h-3 shrink-0" />
+                                <span className="truncate max-w-[90px]">{n.nama}</span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2.5">
                       {access === "CRUD" && (
@@ -919,26 +909,10 @@ export default function DivisiPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1.5">Upload Nota</label>
-                {form.nota ? (
-                  <div className="flex items-center gap-3 p-3 rounded-xl border" style={{ borderColor: "hsl(var(--border))" }}>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">{form.nota.nama}</p>
-                      <p className="text-xs text-muted-foreground">{form.nota.tipe}</p>
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => handleViewNota(form.nota!)} className="text-xs text-blue-500 hover:underline">Lihat</button>
-                      <button onClick={() => setForm(f => ({ ...f, nota: null }))} className="text-xs text-red-500 hover:underline">Hapus</button>
-                    </div>
-                  </div>
-                ) : (
-                  <label className="flex items-center gap-3 p-3 rounded-xl border border-dashed cursor-pointer hover:bg-muted transition-colors"
-                    style={{ borderColor: "hsl(var(--border))" }}>
-                    <Upload className="w-4 h-4 text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">Klik untuk upload nota (PDF, JPG, PNG, maks 2MB)</span>
-                    <input type="file" className="hidden" accept=".pdf,.jpg,.jpeg,.png" onChange={handleNotaUpload} data-testid="input-nota" />
-                  </label>
-                )}
-                {notaError && <p className="text-xs text-red-500 mt-1">{notaError}</p>}
+                <NotaUploader
+                  notas={form.notas}
+                  onChange={(notas) => setForm(f => ({ ...f, notas, nota: notas[0] || null }))}
+                />
               </div>
             </div>
             <div className="flex gap-3 p-5 border-t" style={{ borderColor: "hsl(var(--border))" }}>

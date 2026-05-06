@@ -19,7 +19,7 @@ export default function LoginPage() {
     setIsLoading(true);
     setError("");
     await new Promise(r => setTimeout(r, 400));
-    const result = login(username, password);
+    const result = await login(username, password);
     if (!result.success) {
       setError(result.error || "Login gagal.");
     }
