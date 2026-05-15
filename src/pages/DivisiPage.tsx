@@ -1,18 +1,16 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useParams, Link } from "wouter";
 import {
-  getTransaksi, saveTransaksi, getSaldoAwal, saveSaldoAwal,
-  recalculateSaldo, generateId, formatRupiah, formatDate,
-  DIVISI_CONFIG, DivisiKey, Transaksi, NotaItem, getStorageUsagePercent, getStorageUsageMB,
-  getSaldoAwalDivisi, getSaldoAdmSiswaSummary, SALDO_ADMSISWA_EVENT, SaldoAdmSiswaSummary,
-  getSaldoManualEntries, tambahSaldoManual, updateSaldoManual, hapusSaldoManual, SaldoManualEntry,
-} from "@/lib/storage";
+  formatRupiah, formatDate,
+  DIVISI_CONFIG, DivisiKey, Transaksi, NotaItem, SaldoManualEntry,
+} from "@/lib/types";
+import { transaksiApi, saldoAwalApi, saldoManualApi, admSiswaApi } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { exportToPDF, exportToExcel } from "@/lib/exportUtils";
 import {
-  Plus, Pencil, Trash2, Download, FileText, Printer,
+  Plus, Pencil, Trash2, FileText, Printer,
   Eye, AlertCircle, TrendingUp, TrendingDown, Wallet, FileSpreadsheet,
-  Receipt, RefreshCw, Users, PlusCircle, X, Settings, UploadCloud,
+  RefreshCw, Users, PlusCircle, X, Settings, UploadCloud,
 } from "lucide-react";
 import ImportDokumenModal from "@/components/ImportDokumenModal";
 import ImportDokumenSection from "@/components/ImportDokumenSection";
@@ -90,51 +88,65 @@ export default function DivisiPage() {
   const isImportable = divisi === "amanah" || divisi === "batualam";
   const [showImportModal, setShowImportModal] = useState(false);
 
-  // Untuk TK Yaris: dengarkan event update saldo Adm. Siswa agar
-  // saldo awal selalu sinkron secara realtime.
-  const [admSiswaSummary, setAdmSiswaSummary] = useState<SaldoAdmSiswaSummary>(() => getSaldoAdmSiswaSummary());
-  // Modal kelola saldo manual TK Yaris
+  // State data dari API
+  const [allTransaksi, setAllTransaksi] = useState<Transaksi[]>([]);
+  const [saldoAwalDivisi, setSaldoAwalDivisi] = useState(0);
+  const [isLoadingData, setIsLoadingData] = useState(false);
+
+  // TK Yaris: saldo adm siswa & manual
+  const [admSiswaTotalSaldo, setAdmSiswaTotalSaldo] = useState(0);
+  const [manualEntries, setManualEntries] = useState<SaldoManualEntry[]>([]);
   const [showManualModal, setShowManualModal] = useState(false);
-  const [manualEntries, setManualEntries] = useState<SaldoManualEntry[]>(() => getSaldoManualEntries());
   const [manualForm, setManualForm] = useState({ keterangan: "", nominal: "", tanggal: new Date().toISOString().slice(0, 10) });
   const [manualEditId, setManualEditId] = useState<string | null>(null);
   const [confirmHapusManualId, setConfirmHapusManualId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isTKYaris) return;
-    const onSaldoUpdated = (e: Event) => {
-      const detail = (e as CustomEvent<SaldoAdmSiswaSummary>).detail;
-      const next = detail || getSaldoAdmSiswaSummary();
-      setAdmSiswaSummary(next);
-      setManualEntries(getSaldoManualEntries());
-      setRefresh(r => r + 1);
-    };
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "cashflow_saldo_admsiswa" || e.key === "cashflow_saldo_manual_tkyaris") {
-        setAdmSiswaSummary(getSaldoAdmSiswaSummary());
-        setManualEntries(getSaldoManualEntries());
-        setRefresh(r => r + 1);
-      }
-    };
-    window.addEventListener(SALDO_ADMSISWA_EVENT, onSaldoUpdated as EventListener);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(SALDO_ADMSISWA_EVENT, onSaldoUpdated as EventListener);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, [isTKYaris]);
 
   const totalSaldoManual = useMemo(
     () => manualEntries.reduce((s, e) => s + (Number(e.nominal) || 0), 0),
     [manualEntries]
   );
 
+  // Load data dari API
+  const loadData = useCallback(async () => {
+    if (!config) return;
+    setIsLoadingData(true);
+    try {
+      const params: { month?: number; year?: number } = {};
+      if (filterMonth) params.month = parseInt(filterMonth);
+      if (filterYear) params.year = parseInt(filterYear);
+      const [trs, saldos] = await Promise.all([
+        transaksiApi.list(divisi, params),
+        saldoAwalApi.get(),
+      ]);
+      setAllTransaksi(trs);
+      if (isTKYaris) {
+        const [summary, manuals] = await Promise.all([
+          admSiswaApi.saldoSummary(),
+          saldoManualApi.list(),
+        ]);
+        const totalAdm = summary.total_saldo;
+        const totalManual = manuals.reduce((s, e) => s + e.nominal, 0);
+        setAdmSiswaTotalSaldo(totalAdm);
+        setManualEntries(manuals);
+        setSaldoAwalDivisi(totalAdm + totalManual);
+      } else {
+        setSaldoAwalDivisi(saldos[divisi] ?? 0);
+      }
+    } catch (err: any) {
+      showToast(err?.message || "Gagal memuat data", "error");
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, [divisi, filterMonth, filterYear, isTKYaris, config, showToast]);
+
+  useEffect(() => { loadData(); }, [loadData]);
+
   const resetManualForm = useCallback(() => {
     setManualForm({ keterangan: "", nominal: "", tanggal: new Date().toISOString().slice(0, 10) });
     setManualEditId(null);
   }, []);
 
-  const submitManualEntry = useCallback(() => {
+  const submitManualEntry = useCallback(async () => {
     const ket = manualForm.keterangan.trim();
     const nom = Number(manualForm.nominal);
     if (ket.length < 3) { showToast("Keterangan minimal 3 karakter", "error"); return; }
@@ -142,64 +154,44 @@ export default function DivisiPage() {
     if (!manualForm.tanggal) { showToast("Tanggal wajib diisi", "error"); return; }
     try {
       if (manualEditId) {
-        updateSaldoManual(manualEditId, { keterangan: ket, nominal: nom, tanggal: manualForm.tanggal }, "user");
+        await saldoManualApi.update(manualEditId, { keterangan: ket, nominal: nom, tanggal: manualForm.tanggal });
         showToast("Entri saldo manual diperbarui");
       } else {
-        tambahSaldoManual({ keterangan: ket, nominal: nom, tanggal: manualForm.tanggal }, "user");
+        await saldoManualApi.create({ keterangan: ket, nominal: nom, tanggal: manualForm.tanggal });
         showToast("Entri saldo manual ditambahkan");
       }
-      setManualEntries(getSaldoManualEntries());
+      const manuals = await saldoManualApi.list();
+      setManualEntries(manuals);
+      const totalManual = manuals.reduce((s, e) => s + e.nominal, 0);
+      setSaldoAwalDivisi(admSiswaTotalSaldo + totalManual);
       resetManualForm();
     } catch (err: any) {
       showToast(err?.message || "Gagal menyimpan entri", "error");
     }
-  }, [manualForm, manualEditId, resetManualForm, showToast]);
+  }, [manualForm, manualEditId, resetManualForm, showToast, admSiswaTotalSaldo]);
 
   const startEditManual = useCallback((entry: SaldoManualEntry) => {
     setManualEditId(entry.id);
     setManualForm({ keterangan: entry.keterangan, nominal: String(entry.nominal), tanggal: entry.tanggal });
   }, []);
 
-  const confirmHapusManual = useCallback(() => {
+  const confirmHapusManual = useCallback(async () => {
     if (!confirmHapusManualId) return;
-    if (hapusSaldoManual(confirmHapusManualId, "user")) {
-      setManualEntries(getSaldoManualEntries());
+    try {
+      await saldoManualApi.delete(confirmHapusManualId);
+      const manuals = await saldoManualApi.list();
+      setManualEntries(manuals);
+      const totalManual = manuals.reduce((s, e) => s + e.nominal, 0);
+      setSaldoAwalDivisi(admSiswaTotalSaldo + totalManual);
       showToast("Entri saldo manual dihapus");
+    } catch (err: any) {
+      showToast(err?.message || "Gagal menghapus", "error");
     }
     setConfirmHapusManualId(null);
-  }, [confirmHapusManualId, showToast]);
+  }, [confirmHapusManualId, showToast, admSiswaTotalSaldo]);
 
-  const saldoAwal = getSaldoAwal();
-  // Untuk TK Yaris pakai sumber kebenaran terintegrasi (admsiswa summary).
-  const saldoAwalDivisi = useMemo(
-    () => getSaldoAwalDivisi(divisi),
-    // refresh saat data berubah / event sync
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [divisi, refresh, admSiswaSummary.total_saldo]
-  );
-
-  const allTransaksi = useMemo(() => {
-    return getTransaksi(divisi);
-  }, [divisi, refresh]);
-
-  const filteredTransaksi = useMemo(() => {
-    return allTransaksi.filter(t => {
-      if (filterMonth && !t.tanggal.startsWith(`${filterYear || ""}-${filterMonth}`)) {
-        if (filterYear) {
-          return t.tanggal.startsWith(`${filterYear}-${filterMonth}`);
-        }
-        return t.tanggal.includes(`-${filterMonth}-`);
-      }
-      if (filterYear && !filterMonth) return t.tanggal.startsWith(filterYear);
-      return true;
-    });
-  }, [allTransaksi, filterMonth, filterYear]);
-
-  // Recalculate saldo based on filtered data
-  const displayTransaksi = useMemo(() => {
-    const recalc = recalculateSaldo(filteredTransaksi, saldoAwalDivisi);
-    return recalc;
-  }, [filteredTransaksi, saldoAwalDivisi]);
+  // Data dari API sudah terfilter per bulan/tahun
+  const displayTransaksi = allTransaksi;
 
   const totalMasuk = displayTransaksi.reduce((s, t) => s + t.uang_masuk, 0);
   const totalKeluar = displayTransaksi.reduce((s, t) => s + t.uang_keluar, 0);
@@ -227,55 +219,44 @@ export default function DivisiPage() {
     setShowModal(true);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.tanggal || !form.uraian) {
       showToast("Tanggal dan uraian wajib diisi.", "error");
       return;
     }
-    const all = getTransaksi(divisi);
-    if (editId) {
-      const idx = all.findIndex(t => t.id === editId);
-      if (idx >= 0) {
-        all[idx] = { ...all[idx], ...form, saldo_akhir: 0 };
-      }
-    } else {
-      all.push({ id: generateId(), ...form, saldo_akhir: 0 });
-    }
-    const sorted = all.sort((a, b) => a.tanggal.localeCompare(b.tanggal));
-    const recalced = recalculateSaldo(sorted, saldoAwalDivisi);
-    // TK Yaris: peringatkan jika hasil simpan membuat saldo akhir minus.
-    if (isTKYaris && recalced.length > 0) {
-      const last = recalced[recalced.length - 1].saldo_akhir;
-      if (last < 0) {
-        const ok = window.confirm(
-          `⚠️ PERINGATAN!\n\nSaldo TK Yaris akan menjadi MINUS: ${formatRupiah(last)}.\n\nIngin tetap menyimpan transaksi ini?`
-        );
-        if (!ok) return;
-      }
-    }
     try {
-      saveTransaksi(divisi, recalced);
-    } catch (err) {
-      showToast((err as Error).message || "Gagal menyimpan transaksi.", "error");
-      return;
+      const payload = {
+        tanggal: form.tanggal,
+        uraian: form.uraian,
+        rencana: form.rencana,
+        uang_masuk: form.uang_masuk,
+        uang_keluar: form.uang_keluar,
+        keterangan: form.keterangan,
+        notas: form.notas,
+      };
+      if (editId) {
+        await transaksiApi.update(divisi, editId, payload);
+        showToast("Transaksi berhasil diperbarui.");
+      } else {
+        await transaksiApi.create(divisi, payload);
+        showToast("Transaksi berhasil ditambahkan.");
+      }
+      setShowModal(false);
+      loadData();
+    } catch (err: any) {
+      showToast(err?.message || "Gagal menyimpan transaksi.", "error");
     }
-    setRefresh(r => r + 1);
-    setShowModal(false);
-    showToast(editId ? "Transaksi berhasil diperbarui." : "Transaksi berhasil ditambahkan.");
   };
 
-  const handleDelete = (id: string) => {
-    const all = getTransaksi(divisi).filter(t => t.id !== id);
-    const recalced = recalculateSaldo(all, saldoAwalDivisi);
+  const handleDelete = async (id: string) => {
     try {
-      saveTransaksi(divisi, recalced);
-    } catch (err) {
-      showToast((err as Error).message || "Gagal menghapus transaksi.", "error");
-      return;
+      await transaksiApi.delete(divisi, id);
+      setConfirmDelete(null);
+      showToast("Transaksi berhasil dihapus.");
+      loadData();
+    } catch (err: any) {
+      showToast(err?.message || "Gagal menghapus transaksi.", "error");
     }
-    setRefresh(r => r + 1);
-    setConfirmDelete(null);
-    showToast("Transaksi berhasil dihapus.");
   };
 
   const handleViewNota = (nota: NotaItem) => {
@@ -310,8 +291,7 @@ export default function DivisiPage() {
     </div>
   );
 
-  const storageUsed = getStorageUsagePercent();
-  const storageMB = getStorageUsageMB();
+  // Tidak lagi pakai localStorage — tidak perlu cek storage usage
 
   return (
     <div className="space-y-5">
@@ -492,18 +472,11 @@ export default function DivisiPage() {
         </div>
       )}
 
-      {/* Storage warning banner */}
-      {storageUsed >= 80 && (
-        <div className={`flex items-start gap-3 px-4 py-3 rounded-xl text-sm ${storageUsed >= 95 ? "bg-red-50 text-red-700 border border-red-200" : "bg-amber-50 text-amber-700 border border-amber-200"}`}>
-          <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
-          <div>
-            <p className="font-semibold">
-              {storageUsed >= 95 ? "⚠️ Penyimpanan Hampir Penuh!" : "Peringatan: Penyimpanan Mendekati Batas"}
-            </p>
-            <p className="text-xs mt-0.5">
-              Terpakai {storageMB} MB dari ~5 MB ({storageUsed}%). Hapus nota/file lampiran yang sudah tidak diperlukan untuk mengosongkan ruang penyimpanan.
-            </p>
-          </div>
+      {/* Data tersimpan di database — tidak ada batasan localStorage */}
+      {isLoadingData && (
+        <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-50 text-blue-700 text-sm">
+          <RefreshCw className="w-4 h-4 animate-spin" />
+          <span>Memuat data dari server...</span>
         </div>
       )}
 
@@ -575,16 +548,18 @@ export default function DivisiPage() {
           <span className="font-semibold text-foreground">{formatRupiah(saldoAwalDivisi)}</span>
           {access === "CRUD" && !isTKYaris && (
             <button
-              onClick={() => {
-                const cur = saldoAwal[divisi];
-                const curNum = typeof cur === "number" ? cur : 0;
-                const val = prompt("Masukkan saldo awal baru:", String(curNum));
+              onClick={async () => {
+                const val = prompt("Masukkan saldo awal baru:", String(saldoAwalDivisi));
                 if (val !== null) {
                   const num = parseFloat(val.replace(/[^0-9.-]/g, "")) || 0;
-                  const updated = { ...getSaldoAwal(), [divisi]: num };
-                  saveSaldoAwal(updated);
-                  setRefresh(r => r + 1);
-                  showToast("Saldo awal berhasil diperbarui.");
+                  try {
+                    await saldoAwalApi.update(divisi, num);
+                    setSaldoAwalDivisi(num);
+                    showToast("Saldo awal berhasil diperbarui.");
+                    loadData();
+                  } catch (err: any) {
+                    showToast(err?.message || "Gagal memperbarui saldo awal", "error");
+                  }
                 }
               }}
               className="text-xs text-primary hover:underline font-medium"
@@ -629,7 +604,7 @@ export default function DivisiPage() {
                 <span className="text-xs font-semibold" style={{ color: "#0d47a1" }}>Dari Adm. Keuangan Siswa</span>
               </div>
               <p className="text-xl font-bold" style={{ color: "#0d47a1" }} data-testid="text-saldo-dari-adm-siswa">
-                {formatRupiah(admSiswaSummary.total_saldo)}
+                {formatRupiah(admSiswaTotalSaldo)}
               </p>
               <p className="text-[11px] text-muted-foreground mt-1">
                 Otomatis dari total pembayaran siswa.{" "}
@@ -675,12 +650,12 @@ export default function DivisiPage() {
           >
             <span className="text-sm font-semibold">TOTAL SALDO AWAL</span>
             <span className="text-lg font-bold" data-testid="text-total-saldo-awal-tkyaris">
-              {formatRupiah(admSiswaSummary.total_saldo + totalSaldoManual)}
+              {formatRupiah(admSiswaTotalSaldo + totalSaldoManual)}
             </span>
           </div>
 
           <p className="text-[11px] text-muted-foreground mt-2 text-right">
-            Update terakhir: {admSiswaSummary.updated_at ? new Date(admSiswaSummary.updated_at).toLocaleString("id-ID") : "-"}
+            Data real-time dari database
           </p>
         </div>
       )}
@@ -704,7 +679,7 @@ export default function DivisiPage() {
             </div>
             <p className="text-lg font-bold" style={{ color: "#4527a0" }} data-testid="saldo-awal-tkyaris">{formatRupiah(saldoAwalDivisi)}</p>
             <div className="mt-1 space-y-0.5">
-              <p className="text-[10px] text-muted-foreground">📋 Adm. Siswa: <span className="font-semibold" style={{ color: "#0d47a1" }}>{formatRupiah(admSiswaSummary.total_saldo)}</span></p>
+              <p className="text-[10px] text-muted-foreground">📋 Adm. Siswa: <span className="font-semibold" style={{ color: "#0d47a1" }}>{formatRupiah(admSiswaTotalSaldo)}</span></p>
               <p className="text-[10px] text-muted-foreground">➕ Manual: <span className="font-semibold" style={{ color: "#15803d" }}>{formatRupiah(totalSaldoManual)}</span></p>
             </div>
           </button>

@@ -1,9 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import {
-  ImportableUnit, ImportedRow, IMPORTS_UPDATED_EVENT,
-  getImportedRows, hapusImportedRow, updateImportedRow, syncImportedRowToCashflow,
-  bulkSyncImportedRowsToCashflow, bulkHapusImportedRow, formatRupiah, formatDate,
-} from "@/lib/storage";
+  ImportableUnit, ImportedRow, formatRupiah, formatDate,
+} from "@/lib/types";
+import { importDokumenApi } from "@/lib/api";
 import {
   RefreshCw, Trash2, Pencil, Eye, FileSpreadsheet, FileText, Search, Filter,
   ChevronUp, ChevronDown, CheckCircle2, X, AlertCircle, Inbox, Database,
@@ -20,7 +19,7 @@ type Props = {
 };
 
 export default function ImportDokumenSection({ unit, canCRUD, onAfterSync }: Props) {
-  const [rows, setRows] = useState<ImportedRow[]>(() => getImportedRows(unit));
+  const [rows, setRows] = useState<ImportedRow[]>([]);
   const [search, setSearch] = useState("");
   const [filterKategori, setFilterKategori] = useState("");
   const [filterFrom, setFilterFrom] = useState("");
@@ -42,27 +41,19 @@ export default function ImportDokumenSection({ unit, canCRUD, onAfterSync }: Pro
     setTimeout(() => setToast(null), 3500);
   }, []);
 
-  const reload = useCallback(() => {
-    setRows(getImportedRows(unit));
-    setSelected(new Set());
+  const reload = useCallback(async () => {
+    try {
+      const data = await importDokumenApi.list(unit);
+      setRows(data);
+      setSelected(new Set());
+    } catch (e) {
+      console.error("Gagal load import", e);
+    }
   }, [unit]);
 
   useEffect(() => {
     reload();
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (!detail || detail.unit === unit) reload();
-    };
-    const storageHandler = (e: StorageEvent) => {
-      if (e.key === `cashflow_imports_${unit}`) reload();
-    };
-    window.addEventListener(IMPORTS_UPDATED_EVENT, handler);
-    window.addEventListener("storage", storageHandler);
-    return () => {
-      window.removeEventListener(IMPORTS_UPDATED_EVENT, handler);
-      window.removeEventListener("storage", storageHandler);
-    };
-  }, [unit, reload]);
+  }, [reload]);
 
   const kategoriOptions = useMemo(() => {
     const set = new Set<string>();
@@ -124,40 +115,65 @@ export default function ImportDokumenSection({ unit, canCRUD, onAfterSync }: Pro
     setEditId(r.id);
     setEditForm({ tanggal: r.tanggal, keterangan: r.keterangan, kategori: r.kategori, debit: r.debit, kredit: r.kredit, catatan: r.catatan });
   };
-  const saveEdit = () => {
+  const saveEdit = async () => {
     if (!editId) return;
     try {
-      updateImportedRow(unit, editId, editForm);
+      await importDokumenApi.update(unit, editId, editForm);
       showToast("Baris berhasil diperbarui.");
       setEditId(null);
+      reload();
     } catch (e: any) {
       showToast(e?.message || "Gagal memperbarui baris.", "error");
     }
   };
 
-  const handleSyncOne = (id: string) => {
-    const res = syncImportedRowToCashflow(unit, id);
-    if (res.ok) {
-      showToast("Baris berhasil disinkronkan ke cashflow utama.");
-      onAfterSync?.();
-    } else {
-      showToast(res.reason || "Gagal sinkronisasi.", "error");
+  const handleSyncOne = async (id: string) => {
+    try {
+      const res = await importDokumenApi.sync(unit, id);
+      if (res.ok) {
+        showToast("Baris berhasil disinkronkan ke cashflow utama.");
+        onAfterSync?.();
+        reload();
+      } else {
+        showToast(res.reason || "Gagal sinkronisasi.", "error");
+      }
+    } catch (e: any) {
+      showToast(e?.message || "Gagal sinkronisasi.", "error");
     }
   };
 
-  const handleBulkSync = () => {
+  const handleBulkSync = async () => {
     if (selected.size === 0) return;
-    const res = bulkSyncImportedRowsToCashflow(unit, Array.from(selected));
-    if (res.berhasil > 0) onAfterSync?.();
-    if (res.gagal === 0) showToast(`${res.berhasil} baris berhasil disinkronkan.`);
-    else showToast(`${res.berhasil} berhasil, ${res.gagal} gagal — cek baris yang sudah disync atau invalid.`, res.berhasil > 0 ? "info" : "error");
+    let berhasil = 0;
+    let gagal = 0;
+    for (const id of Array.from(selected)) {
+      try {
+        const res = await importDokumenApi.sync(unit, id);
+        if (res.ok) berhasil++; else gagal++;
+      } catch {
+        gagal++;
+      }
+    }
+    if (berhasil > 0) onAfterSync?.();
+    if (gagal === 0) showToast(`${berhasil} baris berhasil disinkronkan.`);
+    else showToast(`${berhasil} berhasil, ${gagal} gagal — cek baris yang sudah disync atau invalid.`, berhasil > 0 ? "info" : "error");
+    reload();
   };
 
-  const handleConfirmDelete = () => {
+  const handleConfirmDelete = async () => {
     if (!confirmDelete) return;
-    const n = bulkHapusImportedRow(unit, confirmDelete.ids);
+    let n = 0;
+    for (const id of confirmDelete.ids) {
+      try {
+        await importDokumenApi.delete(unit, id);
+        n++;
+      } catch (e) {
+        // ignore
+      }
+    }
     showToast(`${n} baris dihapus.`);
     setConfirmDelete(null);
+    reload();
   };
 
   const totalDebit = filtered.reduce((s, r) => s + (r.debit || 0), 0);

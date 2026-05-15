@@ -18,11 +18,6 @@ class Division extends Model
         'nama_divisi',
         'kode_divisi',
         'color',
-        'created_at',
-    ];
-
-    protected $casts = [
-        'created_at' => 'datetime',
     ];
 
     public function transactions()
@@ -30,13 +25,8 @@ class Division extends Model
         return $this->hasMany(Transaction::class);
     }
 
-    public function cashflowSummaries()
-    {
-        return $this->hasMany(CashflowSummary::class);
-    }
-
     public function saldoAwal()
     {
-        return $this->hasOne(SaldoAwalDivisi::class);
+        return $this->hasOne(SaldoAwalDivisi::class, 'kode_divisi', 'kode_divisi');
     }
 }

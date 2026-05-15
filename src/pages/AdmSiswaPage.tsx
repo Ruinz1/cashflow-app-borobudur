@@ -1,11 +1,10 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  getAdmSiswa, saveAdmSiswa, getDataSiswa, saveDataSiswa, getJenisTagihan,
-  generateId, formatDate, calcAdmSiswaStatus,
-  simpanSaldoAdmSiswa, getSaldoAdmSiswaSummary, SALDO_ADMSISWA_EVENT, SaldoAdmSiswaSummary,
+  formatDate, calcAdmSiswaStatus,
   AdmSiswa, DataSiswa, AdmSiswaStatus, MetodeBayar, SiswaKelas, SiswaStatus, JenisTagihan,
-} from "@/lib/storage";
+} from "@/lib/types";
+import { admSiswaApi, dataSiswaApi, jenisTagihanApi } from "@/lib/api";
 import { Link } from "wouter";
 import { Wallet } from "lucide-react";
 import {
@@ -93,67 +92,41 @@ export default function AdmSiswaPage() {
   const canEdit = access === "CRUD";
 
   const [activeTab, setActiveTab] = useState<"transaksi" | "siswa">("transaksi");
-  const [admData, setAdmData] = useState<AdmSiswa[]>(getAdmSiswa());
-  const [siswaData, setSiswaData] = useState<DataSiswa[]>(getDataSiswa());
-  const [jenisList, setJenisList] = useState<JenisTagihan[]>(getJenisTagihan());
+  const [admData, setAdmData] = useState<AdmSiswa[]>([]);
+  const [siswaData, setSiswaData] = useState<DataSiswa[]>([]);
+  const [jenisList, setJenisList] = useState<JenisTagihan[]>([]);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
-  const [saldoSummary, setSaldoSummary] = useState<SaldoAdmSiswaSummary>(() => getSaldoAdmSiswaSummary());
+  const [saldoSummary, setSaldoSummary] = useState<{ total_saldo: number; rincian: { id_siswa: string; nama: string; total_terbayar: number }[], updated_at?: string, updated_by?: string }>({ total_saldo: 0, rincian: [] });
+  const [isLoading, setIsLoading] = useState(true);
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const refresh = () => {
-    setAdmData(getAdmSiswa());
-    setSiswaData(getDataSiswa());
-    setJenisList(getJenisTagihan());
-  };
-
-  /** Recalc saldo Adm. Siswa, simpan ke localStorage (dispatch event), dan
-   * tampilkan toast info kalau total saldo berubah dari sebelumnya. */
-  const recalcDanSimpanSaldo = useCallback(() => {
-    const sebelum = saldoSummary.total_saldo;
-    const baru = simpanSaldoAdmSiswa(user?.username || "system");
-    setSaldoSummary(baru);
-    if (baru.total_saldo !== sebelum) {
-      const selisih = baru.total_saldo - sebelum;
-      const arah = selisih >= 0 ? "+" : "−";
-      const fmt = `${arah}${admsiswa_formatRupiah(Math.abs(selisih))}`;
-      showToast(`Saldo Awal TK Yaris ter-update otomatis (${fmt}) → ${admsiswa_formatRupiah(baru.total_saldo)}`);
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [adm, sis, jen, sal] = await Promise.all([
+        admSiswaApi.list(),
+        dataSiswaApi.list(),
+        jenisTagihanApi.list(),
+        admSiswaApi.saldoSummary()
+      ]);
+      setAdmData(adm);
+      setSiswaData(sis);
+      setJenisList(jen);
+      setSaldoSummary(sal as any);
+    } catch (e) {
+      console.error("Gagal load AdmSiswa", e);
+    } finally {
+      setIsLoading(false);
     }
-  }, [saldoSummary.total_saldo, user?.username, showToast]);
-
-  // Sinkronisasi realtime: dengarkan event update saldo dari halaman lain
-  // (mis. setelah hapus data) atau perubahan localStorage cross-tab.
-  useEffect(() => {
-    const onSaldoUpdated = (e: Event) => {
-      const detail = (e as CustomEvent<SaldoAdmSiswaSummary>).detail;
-      if (detail) setSaldoSummary(detail);
-      else setSaldoSummary(getSaldoAdmSiswaSummary());
-    };
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "cashflow_saldo_admsiswa" || e.key === "cashflow_admsiswa") {
-        setSaldoSummary(getSaldoAdmSiswaSummary());
-      }
-    };
-    window.addEventListener(SALDO_ADMSISWA_EVENT, onSaldoUpdated as EventListener);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(SALDO_ADMSISWA_EVENT, onSaldoUpdated as EventListener);
-      window.removeEventListener("storage", onStorage);
-    };
   }, []);
 
-  // Pastikan summary konsisten saat halaman pertama kali dibuka.
   useEffect(() => {
-    const expected = getAdmSiswa().reduce((s, a) => s + (a.jumlah_dibayar || 0), 0);
-    if (expected !== saldoSummary.total_saldo) {
-      const baru = simpanSaldoAdmSiswa(user?.username || "system:konsistensi");
-      setSaldoSummary(baru);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    loadData();
+  }, [loadData]);
 
   /** Map id_siswa -> total terbayar (kumulatif). Dipakai kolom "Saldo Terbayar". */
   const totalBayarPerSiswa = useMemo(() => {
@@ -303,7 +276,7 @@ export default function AdmSiswaPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trxForm.jenis_tagihan, showTrxModal]);
 
-  const handleSaveTrx = () => {
+  const handleSaveTrx = async () => {
     if (!trxForm.id_siswa) { showToast("Siswa wajib dipilih.", "error"); return; }
     if (!trxForm.jenis_tagihan) { showToast("Jenis tagihan wajib dipilih.", "error"); return; }
     if (trxNeedsUraianManual && !trxForm.uraian.trim()) { showToast("Uraian wajib diisi untuk jenis Lainnya.", "error"); return; }
@@ -327,45 +300,36 @@ export default function AdmSiswaPage() {
       ? `${jenis?.nama || trxForm.jenis_tagihan} ${periodLabel(trxForm.periode_bulan, trxForm.periode_tahun)}`
       : (trxForm.uraian.trim() || jenis?.nama || trxForm.jenis_tagihan);
 
-    const all = getAdmSiswa();
-    const now = new Date().toISOString();
-
-    if (trxEditId) {
-      const idx = all.findIndex(a => a.id === trxEditId);
-      if (idx >= 0) {
-        all[idx] = {
-          ...all[idx],
+    try {
+      if (trxEditId) {
+        await admSiswaApi.update(trxEditId, {
           id_siswa: siswa.id, nama_siswa: siswa.nama, kelas: siswa.kelas,
           jenis_tagihan: trxForm.jenis_tagihan, uraian: uraianFinal,
           periode_bulan: trxNeedsPeriode ? trxForm.periode_bulan : "",
           periode_tahun: trxNeedsPeriode ? trxForm.periode_tahun : "",
           tagihan: trxForm.tagihan, jumlah_dibayar: trxForm.jumlah_dibayar,
-          sisa, status,
           tgl_transaksi: trxShowBayarFields ? trxForm.tgl_transaksi : "",
           metode_bayar: trxShowBayarFields ? trxForm.metode_bayar : "",
-          keterangan: trxForm.keterangan, updated_at: now,
-        };
+          keterangan: trxForm.keterangan
+        });
+      } else {
+        await admSiswaApi.create({
+          id_siswa: siswa.id, nama_siswa: siswa.nama, kelas: siswa.kelas,
+          jenis_tagihan: trxForm.jenis_tagihan, uraian: uraianFinal,
+          periode_bulan: trxNeedsPeriode ? trxForm.periode_bulan : "",
+          periode_tahun: trxNeedsPeriode ? trxForm.periode_tahun : "",
+          tagihan: trxForm.tagihan, jumlah_dibayar: trxForm.jumlah_dibayar,
+          tgl_transaksi: trxShowBayarFields ? trxForm.tgl_transaksi : "",
+          metode_bayar: trxShowBayarFields ? trxForm.metode_bayar : "",
+          keterangan: trxForm.keterangan
+        });
       }
-    } else {
-      all.unshift({
-        id: "admsiswa-" + generateId(),
-        id_siswa: siswa.id, nama_siswa: siswa.nama, kelas: siswa.kelas,
-        jenis_tagihan: trxForm.jenis_tagihan, uraian: uraianFinal,
-        periode_bulan: trxNeedsPeriode ? trxForm.periode_bulan : "",
-        periode_tahun: trxNeedsPeriode ? trxForm.periode_tahun : "",
-        tagihan: trxForm.tagihan, jumlah_dibayar: trxForm.jumlah_dibayar,
-        sisa, status,
-        tgl_transaksi: trxShowBayarFields ? trxForm.tgl_transaksi : "",
-        metode_bayar: trxShowBayarFields ? trxForm.metode_bayar : "",
-        keterangan: trxForm.keterangan,
-        created_at: now, updated_at: now, created_by: user?.username || "",
-      });
+      loadData();
+      setShowTrxModal(false);
+      showToast(trxEditId ? "Data berhasil diperbarui!" : "Data pembayaran berhasil disimpan!");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menyimpan", "error");
     }
-    try { saveAdmSiswa(all); } catch (e: any) { showToast(e?.message || "Gagal menyimpan", "error"); return; }
-    refresh();
-    setShowTrxModal(false);
-    showToast(trxEditId ? "Data berhasil diperbarui!" : "Data pembayaran berhasil disimpan!");
-    recalcDanSimpanSaldo();
   };
 
   // ===== Modal: Detail =====
@@ -378,41 +342,40 @@ export default function AdmSiswaPage() {
     setBayarItem(item);
     setBayarForm({ jumlah: item.sisa, tgl: new Date().toISOString().slice(0, 10), metode: "Tunai", ket: "" });
   };
-  const handleSaveBayar = () => {
+  const handleSaveBayar = async () => {
     if (!bayarItem) return;
     if (bayarForm.jumlah <= 0) { showToast("Jumlah bayar harus > 0.", "error"); return; }
     if (bayarForm.jumlah > bayarItem.sisa) { showToast("Jumlah bayar melebihi sisa tagihan.", "error"); return; }
     if (!bayarForm.tgl) { showToast("Tgl transaksi wajib diisi.", "error"); return; }
-    const all = getAdmSiswa();
-    const idx = all.findIndex(a => a.id === bayarItem.id);
-    if (idx >= 0) {
-      const newDibayar = all[idx].jumlah_dibayar + bayarForm.jumlah;
-      const { sisa, status } = calcAdmSiswaStatus(all[idx].tagihan, newDibayar);
-      all[idx] = {
-        ...all[idx], jumlah_dibayar: newDibayar, sisa, status,
-        tgl_transaksi: bayarForm.tgl, metode_bayar: bayarForm.metode,
-        keterangan: bayarForm.ket || all[idx].keterangan,
-        updated_at: new Date().toISOString(),
-      };
-      try { saveAdmSiswa(all); } catch (e: any) { showToast(e?.message || "Gagal", "error"); return; }
-      refresh();
+    
+    try {
+      await admSiswaApi.update(bayarItem.id, {
+        jumlah_dibayar: bayarItem.jumlah_dibayar + bayarForm.jumlah,
+        tgl_transaksi: bayarForm.tgl,
+        metode_bayar: bayarForm.metode,
+        keterangan: bayarForm.ket || bayarItem.keterangan
+      });
+      loadData();
       const jum = bayarForm.jumlah;
       setBayarItem(null);
       showToast(`Pembayaran sebesar ${admsiswa_formatRupiah(jum)} berhasil dicatat!`);
-      recalcDanSimpanSaldo();
+    } catch (e: any) {
+      showToast(e?.message || "Gagal", "error");
     }
   };
 
   // ===== Delete =====
   const [confirmDel, setConfirmDel] = useState<AdmSiswa | null>(null);
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!confirmDel) return;
-    const all = getAdmSiswa().filter(a => a.id !== confirmDel.id);
-    saveAdmSiswa(all);
-    refresh();
-    setConfirmDel(null);
-    showToast("Data pembayaran berhasil dihapus.");
-    recalcDanSimpanSaldo();
+    try {
+      await admSiswaApi.delete(confirmDel.id);
+      loadData();
+      setConfirmDel(null);
+      showToast("Data pembayaran berhasil dihapus.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menghapus", "error");
+    }
   };
 
   // ===== Master Siswa =====
@@ -429,33 +392,36 @@ export default function AdmSiswaPage() {
     setSiswaForm({ nama: s.nama, kelas: s.kelas, tahun_ajaran: s.tahun_ajaran, status: s.status });
     setShowSiswaModal(true);
   };
-  const handleSaveSiswa = () => {
+  const handleSaveSiswa = async () => {
     if (!siswaForm.nama.trim()) { showToast("Nama siswa wajib diisi.", "error"); return; }
     if (!siswaForm.tahun_ajaran.trim()) { showToast("Tahun ajaran wajib diisi.", "error"); return; }
-    const all = getDataSiswa();
-    if (siswaEditId) {
-      const idx = all.findIndex(s => s.id === siswaEditId);
-      if (idx >= 0) all[idx] = { ...all[idx], ...siswaForm };
-    } else {
-      all.push({ id: "siswa-" + generateId(), created_at: new Date().toISOString(), ...siswaForm });
+    
+    try {
+      if (siswaEditId) {
+        await dataSiswaApi.update(siswaEditId, siswaForm);
+      } else {
+        await dataSiswaApi.create(siswaForm);
+      }
+      loadData();
+      setShowSiswaModal(false);
+      showToast(siswaEditId ? "Siswa berhasil diperbarui." : "Siswa berhasil ditambahkan.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menyimpan siswa", "error");
     }
-    saveDataSiswa(all);
-    refresh();
-    setShowSiswaModal(false);
-    showToast(siswaEditId ? "Siswa berhasil diperbarui." : "Siswa berhasil ditambahkan.");
   };
   const [confirmDelSiswa, setConfirmDelSiswa] = useState<DataSiswa | null>(null);
-  const handleDeleteSiswa = () => {
+  const handleDeleteSiswa = async () => {
     if (!confirmDelSiswa) return;
-    const trxCount = getAdmSiswa().filter(a => a.id_siswa === confirmDelSiswa.id).length;
-    if (trxCount > 0) {
-      // Allow but inform; spec says don't auto-delete transaksi.
+    const trxCount = admData.filter(a => a.id_siswa === confirmDelSiswa.id).length;
+    
+    try {
+      await dataSiswaApi.delete(confirmDelSiswa.id);
+      loadData();
+      setConfirmDelSiswa(null);
+      showToast(trxCount > 0 ? `Siswa dihapus. ${trxCount} transaksi terkait tetap tersimpan.` : "Siswa berhasil dihapus.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menghapus siswa", "error");
     }
-    const all = getDataSiswa().filter(s => s.id !== confirmDelSiswa.id);
-    saveDataSiswa(all);
-    refresh();
-    setConfirmDelSiswa(null);
-    showToast(trxCount > 0 ? `Siswa dihapus. ${trxCount} transaksi terkait tetap tersimpan.` : "Siswa berhasil dihapus.");
   };
 
   // ===== Rekap per Siswa =====
@@ -696,6 +662,10 @@ export default function AdmSiswaPage() {
         <p className="text-muted-foreground text-sm">Anda tidak memiliki izin untuk mengakses halaman ini.</p>
       </div>
     );
+  }
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground">Memuat administrasi siswa...</div>;
   }
 
   return (

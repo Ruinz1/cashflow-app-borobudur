@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
-import {
-  getTransaksi, formatRupiah, DIVISI_CONFIG, DivisiKey, getAkad, formatDate, getProgresTukang,
-  getSaldoAwalDivisi, getSaldoAdmSiswaSummary, SALDO_ADMSISWA_EVENT, SaldoAdmSiswaSummary,
-  DIVISI_UTAMA_KEYS, getTotalSaldoManualTKYaris,
-} from "@/lib/storage";
+import { formatRupiah, DIVISI_CONFIG, DivisiKey, DIVISI_UTAMA_KEYS, formatDate } from "@/lib/types";
+import { dashboardApi, dataAkadApi, progresTukangApi, admSiswaApi, transaksiApi } from "@/lib/api";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell
@@ -22,66 +19,78 @@ function formatK(val: number) {
 export default function DashboardPage() {
   const { user, hasAccess } = useAuth();
 
-  // Live update saldo Adm. Siswa untuk widget TK Yaris
-  const [admSiswaSummary, setAdmSiswaSummary] = useState<SaldoAdmSiswaSummary>(() => getSaldoAdmSiswaSummary());
-  const [totalSaldoManualTK, setTotalSaldoManualTK] = useState<number>(() => getTotalSaldoManualTKYaris());
-  const [refresh, setRefresh] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
+  const [summaryData, setSummaryData] = useState<any>(null);
+  const [akadData, setAkadData] = useState<any[]>([]);
+  const [progresTukangData, setProgresTukangData] = useState<any[]>([]);
+  const [admSiswaSummary, setAdmSiswaSummary] = useState<{ total_saldo: number; rincian: any[] }>({ total_saldo: 0, rincian: [] });
+  const [recentTransaksi, setRecentTransaksi] = useState<any[]>([]);
+
   useEffect(() => {
-    const onUpdated = (e: Event) => {
-      const detail = (e as CustomEvent<SaldoAdmSiswaSummary>).detail;
-      setAdmSiswaSummary(detail || getSaldoAdmSiswaSummary());
-      setTotalSaldoManualTK(getTotalSaldoManualTKYaris());
-      setRefresh(r => r + 1);
-    };
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "cashflow_saldo_admsiswa" || e.key === "cashflow_saldo_manual_tkyaris" || (e.key && e.key.startsWith("cashflow_"))) {
-        setAdmSiswaSummary(getSaldoAdmSiswaSummary());
-        setTotalSaldoManualTK(getTotalSaldoManualTKYaris());
-        setRefresh(r => r + 1);
+    let mounted = true;
+    const loadDashboard = async () => {
+      try {
+        const [sumRes, akadRes, ptRes, admRes] = await Promise.all([
+          dashboardApi.summary(),
+          hasAccess("akad") !== "NONE" ? dataAkadApi.list() : Promise.resolve([]),
+          hasAccess("progrestukang") !== "NONE" ? progresTukangApi.list() : Promise.resolve([]),
+          hasAccess("tkyaris") !== "NONE" || hasAccess("admsiswa") !== "NONE" ? admSiswaApi.saldoSummary() : Promise.resolve({ total_saldo: 0, rincian: [] }),
+        ]);
+
+        // Load recent transactions (last 5 from all accessible divisions)
+        const allTrs: any[] = [];
+        for (const k of [...DIVISI_UTAMA_KEYS, "tkyaris"] as DivisiKey[]) {
+          if (hasAccess(k) !== "NONE") {
+            try {
+              const trs = await transaksiApi.list(k);
+              trs.forEach(t => allTrs.push({ divisi: DIVISI_CONFIG[k].label, tanggal: t.tanggal, uraian: t.uraian, masuk: t.uang_masuk, keluar: t.uang_keluar }));
+            } catch (e) {}
+          }
+        }
+        allTrs.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime());
+
+        if (mounted) {
+          setSummaryData(sumRes);
+          setAkadData(akadRes);
+          setProgresTukangData(ptRes);
+          setAdmSiswaSummary(admRes);
+          setRecentTransaksi(allTrs.slice(0, 5));
+          setIsLoading(false);
+        }
+      } catch (error) {
+        console.error("Dashboard error:", error);
+        if (mounted) setIsLoading(false);
       }
     };
-    window.addEventListener(SALDO_ADMSISWA_EVENT, onUpdated as EventListener);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(SALDO_ADMSISWA_EVENT, onUpdated as EventListener);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
+    loadDashboard();
+    return () => { mounted = false; };
+  }, [hasAccess]);
 
-  type DivisiCardData = {
-    key: DivisiKey; label: string; color: string;
-    totalMasuk: number; totalKeluar: number; saldo: number; saldoAwal: number;
-  };
-
-  const computeDivisiCard = (k: DivisiKey): DivisiCardData | null => {
-    if (hasAccess(k) === "NONE") return null;
-    const transaksi = getTransaksi(k);
-    const totalMasuk = transaksi.reduce((s, t) => s + t.uang_masuk, 0);
-    const totalKeluar = transaksi.reduce((s, t) => s + t.uang_keluar, 0);
-    const saldoAwal = getSaldoAwalDivisi(k);
-    const saldo = saldoAwal + totalMasuk - totalKeluar;
-    return { key: k, ...DIVISI_CONFIG[k], totalMasuk, totalKeluar, saldo, saldoAwal };
-  };
-
-  // 5 divisi utama (TIDAK termasuk tkyaris)
   const divisiUtamaData = useMemo(() => {
-    return DIVISI_UTAMA_KEYS.map(computeDivisiCard).filter(Boolean) as DivisiCardData[];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refresh]);
+    if (!summaryData) return [];
+    return DIVISI_UTAMA_KEYS.map(k => {
+      if (hasAccess(k) === "NONE") return null;
+      const d = summaryData.divisi[k];
+      if (!d) return null;
+      return { key: k, label: DIVISI_CONFIG[k].label, color: DIVISI_CONFIG[k].color, totalMasuk: d.uang_masuk, totalKeluar: d.uang_keluar, saldo: d.saldo_akhir, saldoAwal: d.saldo_awal };
+    }).filter(Boolean) as any[];
+  }, [summaryData, hasAccess]);
 
-  // TK Yaris terpisah
-  const tkyarisCard = useMemo(() => computeDivisiCard("tkyaris"), [refresh]); // eslint-disable-line react-hooks/exhaustive-deps
+  const tkyarisCard = useMemo(() => {
+    if (!summaryData || hasAccess("tkyaris") === "NONE") return null;
+    const d = summaryData.divisi["tkyaris"];
+    if (!d) return null;
+    return { key: "tkyaris", label: DIVISI_CONFIG["tkyaris"].label, color: DIVISI_CONFIG["tkyaris"].color, totalMasuk: d.uang_masuk, totalKeluar: d.uang_keluar, saldo: d.saldo_akhir, saldoAwal: d.saldo_awal };
+  }, [summaryData, hasAccess]);
 
-  // Gabungan untuk recent transactions / quick access
   const divisiData = useMemo(
     () => (tkyarisCard ? [...divisiUtamaData, tkyarisCard] : divisiUtamaData),
     [divisiUtamaData, tkyarisCard]
   );
 
-  // Total Saldo Perusahaan = HANYA 5 divisi utama
-  const totalSaldo = divisiUtamaData.reduce((s, d) => s + d.saldo, 0);
-  const totalMasukAll = divisiUtamaData.reduce((s, d) => s + d.totalMasuk, 0);
-  const totalKeluarAll = divisiUtamaData.reduce((s, d) => s + d.totalKeluar, 0);
+  const totalSaldo = summaryData?.total_perusahaan || 0;
+  const totalMasukAll = summaryData?.total_masuk || 0;
+  const totalKeluarAll = summaryData?.total_keluar || 0;
 
   const chartData = divisiData.map(d => ({
     name: d.key === "tkyaris"
@@ -92,19 +101,7 @@ export default function DashboardPage() {
     isTkyaris: d.key === "tkyaris",
   }));
 
-  // Recent transactions from all accessible divisions
-  const recentTransaksi = useMemo(() => {
-    const all: Array<{ divisi: string; tanggal: string; uraian: string; masuk: number; keluar: number }> = [];
-    divisiData.forEach(d => {
-      const trs = getTransaksi(d.key);
-      trs.forEach(t => all.push({ divisi: d.label, tanggal: t.tanggal, uraian: t.uraian, masuk: t.uang_masuk, keluar: t.uang_keluar }));
-    });
-    return all.sort((a, b) => new Date(b.tanggal).getTime() - new Date(a.tanggal).getTime()).slice(0, 5);
-  }, [divisiData]);
-
-  // Akad data
   const canAccessAkad = hasAccess("akad") !== "NONE";
-  const akadData = useMemo(() => canAccessAkad ? getAkad() : [], [canAccessAkad]);
   const akadCair = akadData.filter(d => d.status === "Cair").length;
   const akadBelum = akadData.filter(d => d.status === "Belum Cair").length;
   const akadTotal = akadData.length;
@@ -116,13 +113,15 @@ export default function DashboardPage() {
     { name: "Belum Cair", value: akadBelum, color: "#ea580c" },
   ].filter(d => d.value > 0);
 
-  // Progres Tukang data
   const canAccessProgresTukang = hasAccess("progrestukang") !== "NONE";
-  const progresTukangData = useMemo(() => canAccessProgresTukang ? getProgresTukang() : [], [canAccessProgresTukang]);
   const ptTotal = progresTukangData.length;
   const ptBerjalan = progresTukangData.filter(p => p.status === "Berjalan").length;
   const ptSelesai = progresTukangData.filter(p => p.status === "Selesai").length;
   const ptTotalSisa = progresTukangData.reduce((s, p) => s + p.sisa_progres, 0);
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center h-64 text-muted-foreground"><RefreshCw className="w-8 h-8 animate-spin" /></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -237,8 +236,8 @@ export default function DashboardPage() {
             <Link href="/divisi/tkyaris" className="block rounded-xl p-3 bg-white border hover:opacity-90 transition-opacity"
               style={{ borderColor: "rgba(21,128,61,0.25)" }}
               data-testid="tkyaris-card-saldo-manual">
-              <p className="text-[11px] text-muted-foreground">Saldo Awal — Manual</p>
-              <p className="text-base font-bold mt-1" style={{ color: "#15803d" }}>{formatRupiah(totalSaldoManualTK)}</p>
+              <p className="text-[11px] text-muted-foreground">Saldo Awal</p>
+              <p className="text-base font-bold mt-1" style={{ color: "#15803d" }}>{formatRupiah(tkyarisCard.saldoAwal)}</p>
             </Link>
             <Link href="/divisi/tkyaris" className="block rounded-xl p-3 bg-white border hover:opacity-90 transition-opacity"
               style={{ borderColor: "rgba(220,38,38,0.25)" }}
@@ -546,7 +545,7 @@ export default function DashboardPage() {
                 <Wallet className="w-3.5 h-3.5 text-green-100" />
                 <p className="text-xs text-green-100">Saldo Awal TK Yaris</p>
               </div>
-              <p className="text-base font-bold">{formatRupiah(getSaldoAwalDivisi("tkyaris"))}</p>
+              <p className="text-base font-bold">{formatRupiah(tkyarisCard?.saldoAwal || 0)}</p>
             </Link>
             <div className="block rounded-xl p-4 text-white" style={{ background: "linear-gradient(135deg, #1e3a8a, #2563eb)" }}>
               <div className="flex items-center gap-1 mb-1">
@@ -558,9 +557,7 @@ export default function DashboardPage() {
                   day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit"
                 }) : "Belum ada update"}
               </p>
-              {admSiswaSummary.updated_by && (
-                <p className="text-[10px] text-blue-200 mt-0.5">oleh: {admSiswaSummary.updated_by}</p>
-              )}
+              <p className="text-[10px] text-blue-200 mt-0.5">Data ter-sinkron dengan server</p>
             </div>
           </div>
         </div>

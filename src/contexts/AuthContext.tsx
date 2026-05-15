@@ -1,11 +1,17 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import {
-  User,
-  getSession, saveSession, clearSession,
-  getSessionToken, saveSessionToken, clearSessionToken,
-  getUserAccess, initStorage,
-} from "@/lib/storage";
-import { initFromDatabase, syncLocalStorageToDb } from "@/lib/dbSync";
+
+import { hakAksesApi, authApi } from "@/lib/api";
+
+export interface User {
+  id: string;
+  namaLengkap: string;
+  username: string;
+  role: string;
+  status: "aktif" | "nonaktif";
+}
+
+// Simple in-memory hak akses cache (loaded after login)
+let hakAksesCache: Record<string, Record<string, string>> = {};
 
 interface AuthContextType {
   user: User | null;
@@ -17,53 +23,88 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+// ── Session helpers (sessionStorage — hanya token & user info) ──────────────
+function getSessionUser(): User | null {
+  const s = sessionStorage.getItem("cashflow_session");
+  return s ? JSON.parse(s) : null;
+}
+function saveSessionUser(user: User) {
+  sessionStorage.setItem("cashflow_session", JSON.stringify(user));
+}
+function clearSessionUser() {
+  sessionStorage.removeItem("cashflow_session");
+}
+
+function getSessionToken(): string | null {
+  return sessionStorage.getItem("cashflow_token");
+}
+function saveSessionToken(token: string) {
+  sessionStorage.setItem("cashflow_token", token);
+}
+function clearSessionToken() {
+  sessionStorage.removeItem("cashflow_token");
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser]         = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    initStorage();
-    // Hydrate dari DB (non-blocking; fallback ke localStorage jika DB offline)
-    initFromDatabase().finally(() => {
-      const session = getSession();
-      const token = getSessionToken();
-      if (session && token) {
-        setUser(session);
-      } else if (session && !token) {
-        // Ada sesi lama tapi token sudah hilang (server restart) — minta login ulang
-        clearSession();
-      }
+    const token = getSessionToken();
+    const session = getSessionUser();
+
+    if (token && session) {
+      // Verify token still valid
+      Promise.all([authApi.me(), hakAksesApi.get()])
+        .then(([me, hak]) => {
+          const u: User = {
+            id: me.id,
+            namaLengkap: me.namaLengkap,
+            username: me.username,
+            role: me.role,
+            status: me.status as "aktif" | "nonaktif",
+          };
+          saveSessionUser(u);
+          setUser(u);
+          hakAksesCache = hak;
+        })
+        .catch(() => {
+          // Token expired or invalid
+          clearSessionToken();
+          clearSessionUser();
+        })
+        .finally(() => setIsLoading(false));
+    } else {
+      clearSessionToken();
+      clearSessionUser();
       setIsLoading(false);
-    });
+    }
   }, []);
 
   const login = async (username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     try {
-      const response = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await response.json();
+      const data = await authApi.login(username, password);
+
       if (!data.ok) {
-        return { success: false, error: data.error || "Username atau password salah." };
+        return { success: false, error: "Username atau password salah." };
       }
 
-      // Simpan token dan sesi
-      saveSessionToken(data.token as string);
-      const userObj: User = {
-        id: String(data.user.id),
+      saveSessionToken(data.token);
+
+      const u: User = {
+        id: data.user.id,
         namaLengkap: data.user.namaLengkap,
         username: data.user.username,
-        password: "",  // tidak dikirim dari server, kosongkan
         role: data.user.role,
         status: data.user.status as "aktif" | "nonaktif",
       };
-      saveSession(userObj);
-      setUser(userObj);
+      saveSessionUser(u);
+      
+      try {
+        hakAksesCache = await hakAksesApi.get();
+      } catch {}
 
-      // Push data localStorage ke DB (fire-and-forget, tidak blokir UI)
-      syncLocalStorageToDb().catch(() => {});
+      setUser(u);
 
       return { success: true };
     } catch (error) {
@@ -74,20 +115,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = async () => {
     const token = getSessionToken();
     if (token) {
-      // Notify server untuk invalidate token (best-effort)
-      fetch("/api/auth/logout", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${token}` },
-      }).catch(() => {});
+      authApi.logout().catch(() => {});
     }
     clearSessionToken();
-    clearSession();
+    clearSessionUser();
+    hakAksesCache = {};
     setUser(null);
   };
 
   const hasAccess = (halaman: string): "CRUD" | "VIEW" | "NONE" => {
     if (!user) return "NONE";
-    return getUserAccess(user.role, halaman);
+    const roleHak = hakAksesCache[user.role] || {};
+    return (roleHak[halaman] as "CRUD" | "VIEW" | "NONE") || "NONE";
   };
 
   return (

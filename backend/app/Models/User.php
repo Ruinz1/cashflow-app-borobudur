@@ -22,19 +22,23 @@ class User extends Authenticatable
         'nama_lengkap',
         'role',
         'status',
-        'created_at',
     ];
 
     protected $hidden = [
         'password_hash',
     ];
 
+    /**
+     * Laravel Sanctum / Hash::check uses the 'password' attribute by default.
+     * We override getAuthPassword() to point to password_hash column.
+     */
+    public function getAuthPassword()
+    {
+        return $this->password_hash;
+    }
+
     protected $casts = [
         'created_at' => 'datetime',
+        'updated_at' => 'datetime',
     ];
-
-    public function auditLogs()
-    {
-        return $this->hasMany(AuditLog::class);
-    }
 }

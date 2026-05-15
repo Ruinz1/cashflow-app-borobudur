@@ -20,34 +20,49 @@ class AuthController extends Controller
         $user = User::where('username', $request->username)->first();
 
         if (!$user || !Hash::check($request->password, $user->password_hash)) {
-            throw ValidationException::withMessages([
-                'username' => ['Username atau password salah.'],
-            ]);
+            return response()->json([
+                'ok' => false,
+                'error' => 'Username atau password salah.',
+            ], 401);
         }
 
         if ($user->status !== 'aktif') {
-            throw ValidationException::withMessages([
-                'username' => ['Akun tidak aktif.'],
-            ]);
+            return response()->json([
+                'ok' => false,
+                'error' => 'Akun tidak aktif.',
+            ], 403);
         }
 
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([
-            'user' => $user,
+            'ok'    => true,
             'token' => $token,
+            'user'  => [
+                'id'          => $user->id,
+                'namaLengkap' => $user->nama_lengkap,
+                'username'    => $user->username,
+                'role'        => $user->role,
+                'status'      => $user->status,
+            ],
         ]);
     }
 
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()->delete();
-
-        return response()->json(['message' => 'Logged out successfully']);
+        return response()->json(['ok' => true, 'message' => 'Logged out successfully']);
     }
 
     public function me(Request $request)
     {
-        return response()->json($request->user());
+        $user = $request->user();
+        return response()->json([
+            'id'          => $user->id,
+            'namaLengkap' => $user->nama_lengkap,
+            'username'    => $user->username,
+            'role'        => $user->role,
+            'status'      => $user->status,
+        ]);
     }
 }

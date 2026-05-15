@@ -1,9 +1,9 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect } from "react"
 import {
-  getTransaksi, formatRupiah, DIVISI_CONFIG, DivisiKey,
-  getSaldoAwalDivisi, SALDO_ADMSISWA_EVENT,
-  DIVISI_UTAMA_KEYS, getSaldoAdmSiswaSummary, getTotalSaldoManualTKYaris,
-} from "@/lib/storage";
+  formatRupiah, DIVISI_CONFIG, DivisiKey,
+  DIVISI_UTAMA_KEYS, Transaksi,
+} from "@/lib/types";
+import { transaksiApi, saldoAwalApi, admSiswaApi, saldoManualApi } from "@/lib/api";
 import { exportLaporanPDF, exportLaporanExcel } from "@/lib/exportUtils";
 import { useAuth } from "@/contexts/AuthContext";
 import {
@@ -40,44 +40,82 @@ export default function LaporanPage() {
   const [filterYear, setFilterYear] = useState(String(new Date().getFullYear()));
   const [tampilkanTKYaris, setTampilkanTKYaris] = useState(true);
 
-  // Refresh saat saldo Adm. Siswa / saldo manual berubah (mempengaruhi saldo TK Yaris).
-  const [refresh, setRefresh] = useState(0);
+  const [allTransaksi, setAllTransaksi] = useState<Record<string, Transaksi[]>>({});
+  const [saldoAwalDivisi, setSaldoAwalDivisi] = useState<Record<string, number>>({});
+  const [admSiswaSummary, setAdmSiswaSummary] = useState<{ total_saldo: number }>({ total_saldo: 0 });
+  const [totalSaldoManualTK, setTotalSaldoManualTK] = useState<number>(0);
+  const [isLoading, setIsLoading] = useState(true);
+
   useEffect(() => {
-    const onUpdated = () => setRefresh(r => r + 1);
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === "cashflow_saldo_admsiswa" || e.key === "cashflow_saldo_manual_tkyaris") {
-        setRefresh(r => r + 1);
+    let mounted = true;
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        const trsMap: Record<string, Transaksi[]> = {};
+        for (const k of [...DIVISI_UTAMA_KEYS, "tkyaris"] as DivisiKey[]) {
+          if (hasAccess(k) !== "NONE") {
+            try {
+              trsMap[k] = await transaksiApi.list(k);
+            } catch (e) {}
+          }
+        }
+        const saldos = await saldoAwalApi.get();
+        let admTotal = 0;
+        let manualTotal = 0;
+
+        if (hasAccess("tkyaris") !== "NONE" || hasAccess("admsiswa") !== "NONE") {
+           try {
+             const [admRes, manuals] = await Promise.all([
+               admSiswaApi.saldoSummary(),
+               saldoManualApi.list()
+             ]);
+             admTotal = admRes.total_saldo;
+             manualTotal = manuals.reduce((s, m) => s + m.nominal, 0);
+           } catch(e) {}
+        }
+
+        if (mounted) {
+          setAllTransaksi(trsMap);
+          setSaldoAwalDivisi(saldos);
+          setAdmSiswaSummary({ total_saldo: admTotal });
+          setTotalSaldoManualTK(manualTotal);
+          setIsLoading(false);
+        }
+      } catch (err) {
+        console.error("Gagal memuat laporan", err);
+        if (mounted) setIsLoading(false);
       }
     };
-    window.addEventListener(SALDO_ADMSISWA_EVENT, onUpdated);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.removeEventListener(SALDO_ADMSISWA_EVENT, onUpdated);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, []);
+    loadData();
+    return () => { mounted = false; };
+  }, [hasAccess]);
 
   const computeRow = (k: DivisiKey): LaporanRow | null => {
     if (hasAccess(k) === "NONE") return null;
-    const all = getTransaksi(k);
+    const all = allTransaksi[k] || [];
     const filtered = all.filter(t => {
       if (periodeType === "bulanan") return t.tanggal.startsWith(`${filterYear}-${filterMonth}`);
       return t.tanggal.startsWith(filterYear);
     });
     const masuk = filtered.reduce((s, t) => s + t.uang_masuk, 0);
     const keluar = filtered.reduce((s, t) => s + t.uang_keluar, 0);
-    const saldo = getSaldoAwalDivisi(k) + masuk - keluar;
+    
+    let saldoAwal = saldoAwalDivisi[k] ?? 0;
+    if (k === "tkyaris") {
+        saldoAwal = admSiswaSummary.total_saldo + totalSaldoManualTK;
+    }
+    const saldo = saldoAwal + masuk - keluar;
     return { key: k, label: DIVISI_CONFIG[k].label, color: DIVISI_CONFIG[k].color, masuk, keluar, saldo };
   };
 
   const divisiUtamaData = useMemo(() => {
     return DIVISI_UTAMA_KEYS.map(computeRow).filter(Boolean) as LaporanRow[];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [periodeType, filterMonth, filterYear, refresh]);
+  }, [periodeType, filterMonth, filterYear, allTransaksi, saldoAwalDivisi, admSiswaSummary, totalSaldoManualTK]);
 
   const tkyarisRow = useMemo<LaporanRow | null>(() => computeRow("tkyaris"),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [periodeType, filterMonth, filterYear, refresh]);
+    [periodeType, filterMonth, filterYear, allTransaksi, saldoAwalDivisi, admSiswaSummary, totalSaldoManualTK]);
 
   // Total Perusahaan = HANYA 5 divisi utama
   const totalMasuk = divisiUtamaData.reduce((s, d) => s + d.masuk, 0);
@@ -89,8 +127,6 @@ export default function LaporanPage() {
     .map(d => ({ name: d.label, value: d.saldo, color: d.color }));
 
   // Donut TK Yaris breakdown: Adm Siswa vs Manual
-  const admSiswaSummary = useMemo(() => getSaldoAdmSiswaSummary(), [refresh]);
-  const totalSaldoManualTK = useMemo(() => getTotalSaldoManualTKYaris(), [refresh]);
   const tkyarisDonutData = [
     { name: "Adm. Siswa", value: admSiswaSummary.total_saldo, color: "#0d47a1" },
     { name: "Saldo Manual", value: totalSaldoManualTK, color: "#15803d" },
@@ -109,12 +145,12 @@ export default function LaporanPage() {
       let masukUtama = 0, keluarUtama = 0, masukTK = 0, keluarTK = 0;
       DIVISI_UTAMA_KEYS.forEach(k => {
         if (hasAccess(k) === "NONE") return;
-        const trs = getTransaksi(k).filter(t => t.tanggal.startsWith(ym));
+        const trs = (allTransaksi[k] || []).filter(t => t.tanggal.startsWith(ym));
         masukUtama += trs.reduce((s, t) => s + t.uang_masuk, 0);
         keluarUtama += trs.reduce((s, t) => s + t.uang_keluar, 0);
       });
       if (hasAccess("tkyaris") !== "NONE") {
-        const trs = getTransaksi("tkyaris").filter(t => t.tanggal.startsWith(ym));
+        const trs = (allTransaksi["tkyaris"] || []).filter(t => t.tanggal.startsWith(ym));
         masukTK = trs.reduce((s, t) => s + t.uang_masuk, 0);
         keluarTK = trs.reduce((s, t) => s + t.uang_keluar, 0);
       }
@@ -126,7 +162,7 @@ export default function LaporanPage() {
         keluarTK,
       };
     });
-  }, [refresh, hasAccess]);
+  }, [allTransaksi, hasAccess]);
 
   const periodeLabel = periodeType === "bulanan"
     ? `${FULL_MONTHS[parseInt(filterMonth) - 1]} ${filterYear}`
@@ -154,6 +190,10 @@ export default function LaporanPage() {
     if (Math.abs(val) >= 1_000_000) return `${(val / 1_000_000).toFixed(1)}Jt`;
     if (Math.abs(val) >= 1_000) return `${(val / 1_000).toFixed(0)}Rb`;
     return String(val);
+  }
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground">Memuat laporan...</div>;
   }
 
   return (

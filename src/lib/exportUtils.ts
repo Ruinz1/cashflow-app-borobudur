@@ -1,4 +1,4 @@
-import { Transaksi, formatRupiah, formatDate } from "./storage";
+import { Transaksi, formatRupiah, formatDate } from "./types";
 
 export async function exportToPDF(
   divisiLabel: string,

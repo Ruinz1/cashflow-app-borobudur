@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Upload, X, Eye, FileText, Image } from "lucide-react";
-import type { NotaItem } from "@/lib/storage";
+import type { NotaItem } from "@/lib/types";
 
 interface NotaUploaderProps {
   notas: NotaItem[];

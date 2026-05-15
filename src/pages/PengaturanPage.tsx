@@ -1,9 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import {
-  getUsers, saveUsers, getHakAkses, saveHakAkses,
-  generateId, User, HakAkses
-} from "@/lib/storage";
+import { User } from "@/lib/types";
+import { usersApi, hakAksesApi } from "@/lib/api";
 import { Plus, Pencil, Trash2, Eye, EyeOff, AlertCircle, Shield } from "lucide-react";
 
 const ROLES = [
@@ -46,8 +44,9 @@ function Toast({ message, type }: { message: string; type: "success" | "error" }
 export default function PengaturanPage() {
   const { user, hasAccess } = useAuth();
   const [activeTab, setActiveTab] = useState<"users" | "akses">("users");
-  const [users, setUsers] = useState<User[]>(getUsers());
-  const [hakAkses, setHakAkses] = useState<HakAkses>(getHakAkses());
+  const [users, setUsers] = useState<User[]>([]);
+  const [hakAkses, setHakAkses] = useState<Record<string, Record<string, string>>>({});
+  const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState({ namaLengkap: "", username: "", password: "", role: "admin", status: "aktif" as "aktif" | "nonaktif" });
@@ -62,8 +61,21 @@ export default function PengaturanPage() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const refreshUsers = () => setUsers(getUsers());
-  const refreshHakAkses = () => setHakAkses(getHakAkses());
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const [u, h] = await Promise.all([usersApi.list(), hakAksesApi.get()]);
+      setUsers(u as User[]);
+      setHakAkses(h);
+    } catch (error) {
+      console.error("Gagal memuat pengaturan", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const handleOpenAdd = () => {
     setEditId(null);
@@ -80,7 +92,7 @@ export default function PengaturanPage() {
     setShowModal(true);
   };
 
-  const handleSaveUser = () => {
+  const handleSaveUser = async () => {
     if (!form.namaLengkap.trim() || !form.username.trim()) {
       showToast("Nama lengkap dan username wajib diisi.", "error"); return;
     }
@@ -90,43 +102,50 @@ export default function PengaturanPage() {
     if (form.password && form.password.length < 6) {
       showToast("Password minimal 6 karakter.", "error"); return;
     }
-    const all = getUsers();
+    const all = users;
     const dup = all.find(u => u.username === form.username && u.id !== editId);
     if (dup) { showToast("Username sudah digunakan.", "error"); return; }
 
-    if (editId) {
-      const existing = all.find(u => u.id === editId);
-      if (user?.role === "admin" && existing?.role === "owner" && form.role !== "owner") {
-        showToast("Anda tidak bisa mengubah role Owner.", "error"); return;
+    try {
+      if (editId) {
+        const existing = all.find(u => u.id === editId);
+        if (user?.role === "admin" && existing?.role === "owner" && form.role !== "owner") {
+          showToast("Anda tidak bisa mengubah role Owner.", "error"); return;
+        }
+        await usersApi.update(editId, form);
+        showToast("Pengguna berhasil diperbarui.");
+      } else {
+        await usersApi.create(form);
+        showToast("Pengguna berhasil ditambahkan.");
       }
-      const idx = all.findIndex(u => u.id === editId);
-      if (idx >= 0) {
-        // Hanya update password jika admin mengisi field baru; jika kosong, pertahankan password lama
-        const updatedPassword = form.password ? form.password : all[idx].password;
-        all[idx] = { ...all[idx], namaLengkap: form.namaLengkap, username: form.username, role: form.role, status: form.status, password: updatedPassword };
-      }
-    } else {
-      all.push({ id: generateId(), ...form });
+      setShowModal(false);
+      loadData();
+    } catch (err: any) {
+      showToast(err?.message || "Gagal menyimpan pengguna", "error");
     }
-    saveUsers(all);
-    refreshUsers();
-    setShowModal(false);
-    showToast(editId ? "Pengguna berhasil diperbarui." : "Pengguna berhasil ditambahkan.");
   };
 
-  const handleDeleteUser = (id: string) => {
+  const handleDeleteUser = async (id: string) => {
     if (id === user?.id) { showToast("Tidak bisa menghapus akun sendiri.", "error"); setConfirmDelete(null); return; }
-    const all = getUsers().filter(u => u.id !== id);
-    saveUsers(all);
-    refreshUsers();
-    setConfirmDelete(null);
-    showToast("Pengguna berhasil dihapus.");
+    try {
+      await usersApi.delete(id);
+      setConfirmDelete(null);
+      showToast("Pengguna berhasil dihapus.");
+      loadData();
+    } catch (err: any) {
+      showToast(err?.message || "Gagal menghapus pengguna", "error");
+    }
   };
 
-  const handleAccessChange = (role: string, halaman: string, val: "CRUD" | "VIEW" | "NONE") => {
+  const handleAccessChange = async (role: string, halaman: string, val: "CRUD" | "VIEW" | "NONE") => {
     const updated = { ...hakAkses, [role]: { ...(hakAkses[role] || {}), [halaman]: val } };
     setHakAkses(updated);
-    saveHakAkses(updated);
+    try {
+      await hakAksesApi.update(updated);
+    } catch (err: any) {
+      showToast(err?.message || "Gagal menyimpan hak akses", "error");
+      loadData(); // revert on fail
+    }
   };
 
   const getRoleLabel = (role: string) => ROLES.find(r => r.val === role)?.label || role;
@@ -138,6 +157,10 @@ export default function PengaturanPage() {
       <p className="text-muted-foreground text-sm">Anda tidak memiliki izin untuk mengakses halaman ini.</p>
     </div>
   );
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground">Memuat pengaturan...</div>;
+  }
 
   return (
     <div className="space-y-5">

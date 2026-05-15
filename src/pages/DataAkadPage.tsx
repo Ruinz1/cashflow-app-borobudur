@@ -1,7 +1,8 @@
-import { useState, useMemo, useCallback, useRef } from "react";
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
-import { getAkad, saveAkad, generateId, formatDate, DataAkad } from "@/lib/storage";
+import { formatDate, DataAkad } from "@/lib/types";
+import { dataAkadApi } from "@/lib/api";
 import {
   PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer,
   BarChart, Bar, XAxis, YAxis, CartesianGrid
@@ -64,7 +65,8 @@ export default function DataAkadPage({ initialFilter }: { initialFilter?: string
   const [, setLocation] = useLocation();
   const access = hasAccess("akad");
 
-  const [allData, setAllData] = useState<DataAkad[]>(() => getAkad());
+  const [allData, setAllData] = useState<DataAkad[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
@@ -87,7 +89,20 @@ export default function DataAkadPage({ initialFilter }: { initialFilter?: string
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const refresh = () => setAllData(getAkad());
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const data = await dataAkadApi.list();
+      setAllData(data);
+    } catch (e) {
+      console.error("Gagal load data akad", e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const handleApplyFilter = () => {
     setAppliedFilter({ nama: fNama, blok: fBlok, bank: fBank, status: fStatus, dari: fDari, sampai: fSampai });
@@ -156,7 +171,7 @@ export default function DataAkadPage({ initialFilter }: { initialFilter?: string
     setModalMode("view");
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.tanggal_akad) { showToast("Tanggal akad wajib diisi.", "error"); return; }
     if (!form.nama_user || form.nama_user.length < 3) { showToast("Nama user minimal 3 karakter.", "error"); return; }
     if (!form.blok) { showToast("Blok wajib diisi.", "error"); return; }
@@ -164,48 +179,42 @@ export default function DataAkadPage({ initialFilter }: { initialFilter?: string
     if (form.bank === "Bank Lainnya" && !form.bank_lain) { showToast("Nama bank wajib diisi.", "error"); return; }
     if (form.status === "Cair" && !form.tanggal_cair) { showToast("Tanggal cair wajib diisi jika status Cair.", "error"); return; }
 
-    const now = new Date().toISOString();
     const bankFinal = form.bank === "Bank Lainnya" ? form.bank_lain : form.bank;
-    const all = getAkad();
 
-    if (modalMode === "edit" && selectedId) {
-      const idx = all.findIndex(x => x.id === selectedId);
-      if (idx >= 0) {
-        all[idx] = {
-          ...all[idx],
+    try {
+      if (modalMode === "edit" && selectedId) {
+        await dataAkadApi.update(selectedId, {
           tanggal_akad: form.tanggal_akad, nama_user: form.nama_user, blok: form.blok,
           bank: bankFinal, status: form.status,
           tanggal_cair: form.status === "Cair" ? form.tanggal_cair : null,
-          keterangan: form.keterangan, updated_at: now,
-        };
+          keterangan: form.keterangan,
+        });
+        showToast("Data berhasil diperbarui.");
+      } else {
+        await dataAkadApi.create({
+          tanggal_akad: form.tanggal_akad, nama_user: form.nama_user, blok: form.blok,
+          bank: bankFinal, status: form.status,
+          tanggal_cair: form.status === "Cair" ? form.tanggal_cair : null,
+          keterangan: form.keterangan,
+        });
+        showToast("Data akad berhasil ditambahkan.");
       }
-      saveAkad(all);
-      refresh();
+      loadData();
       setModalMode(null);
-      showToast("Data berhasil diperbarui.");
-    } else {
-      const newItem: DataAkad = {
-        id: "akad-" + generateId(),
-        tanggal_akad: form.tanggal_akad, nama_user: form.nama_user, blok: form.blok,
-        bank: bankFinal, status: form.status,
-        tanggal_cair: form.status === "Cair" ? form.tanggal_cair : null,
-        keterangan: form.keterangan, created_at: now, updated_at: now,
-        created_by: user?.username || "unknown",
-      };
-      all.push(newItem);
-      saveAkad(all);
-      refresh();
-      setModalMode(null);
-      showToast("Data akad berhasil ditambahkan.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menyimpan data", "error");
     }
   };
 
-  const handleDelete = (id: string) => {
-    const all = getAkad().filter(x => x.id !== id);
-    saveAkad(all);
-    refresh();
-    setConfirmId(null);
-    showToast("Data akad berhasil dihapus.");
+  const handleDelete = async (id: string) => {
+    try {
+      await dataAkadApi.delete(id);
+      loadData();
+      setConfirmId(null);
+      showToast("Data akad berhasil dihapus.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menghapus data", "error");
+    }
   };
 
   const handleExportPDF = async () => {
@@ -254,6 +263,10 @@ export default function DataAkadPage({ initialFilter }: { initialFilter?: string
       <p className="text-lg font-semibold text-foreground">Akses Ditolak</p>
       <p className="text-muted-foreground text-sm">Anda tidak memiliki izin untuk mengakses halaman ini.</p>
     </div>
+  );
+
+  if (isLoading) return (
+    <div className="p-8 text-center text-muted-foreground">Memuat data akad...</div>
   );
 
   return (

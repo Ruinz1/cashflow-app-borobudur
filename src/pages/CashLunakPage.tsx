@@ -1,9 +1,10 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  getCashLunak, saveCashLunak, calcCashLunak, generateId,
+  calcCashLunak, generateId,
   formatDate, CashLunak, Cicilan
-} from "@/lib/storage";
+} from "@/lib/types";
+import { cashLunakApi } from "@/lib/api";
 
 // Cash Lunak — local Rupiah formatter (strict spec: "Rp 173.000.000")
 function formatRupiah(angka: number | null | undefined): string {
@@ -103,7 +104,8 @@ export default function CashLunakPage() {
   const access = hasAccess("cashlunak");
   const canEdit = access === "CRUD";
 
-  const [allData, setAllData] = useState<CashLunak[]>(() => getCashLunak());
+  const [allData, setAllData] = useState<CashLunak[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [modalMode, setModalMode] = useState<ModalMode>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState({ ...EMPTY_FORM });
@@ -128,7 +130,20 @@ export default function CashLunakPage() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const refresh = () => setAllData(getCashLunak());
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const data = await cashLunakApi.list();
+      setAllData(data);
+    } catch (e) {
+      console.error("Gagal load data", e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   const filtered = useMemo(() => {
     return allData.filter(item => {
@@ -236,7 +251,7 @@ export default function CashLunakPage() {
   };
 
   // Save (add/edit)
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!canEdit) { showToast("Anda tidak memiliki izin", "error"); return; }
     if (!form.nama_pembeli.trim() || form.nama_pembeli.trim().length < 3) {
       showToast("Nama pembeli minimal 3 karakter", "error"); return;
@@ -252,12 +267,8 @@ export default function CashLunakPage() {
     if ((form.keterangan || "").length > 300) { showToast("Keterangan maks 300 karakter", "error"); return; }
 
     try {
-      const all = getCashLunak();
       if (modalMode === "edit" && selectedId) {
-        const idx = all.findIndex(x => x.id === selectedId);
-        if (idx === -1) { showToast("Data tidak ditemukan", "error"); return; }
-        all[idx] = {
-          ...all[idx],
+        await cashLunakApi.update(selectedId, {
           nama_pembeli: form.nama_pembeli.trim(),
           blok: form.blok.trim(),
           tanggal_dp: form.tanggal_dp,
@@ -265,12 +276,9 @@ export default function CashLunakPage() {
           jumlah_dp: form.jumlah_dp,
           tenor: form.tenor,
           keterangan: form.keterangan,
-          updated_at: new Date().toISOString(),
-        };
+        });
       } else {
-        const now = new Date().toISOString();
-        all.push({
-          id: generateId(),
+        await cashLunakApi.create({
           nama_pembeli: form.nama_pembeli.trim(),
           blok: form.blok.trim(),
           tanggal_dp: form.tanggal_dp,
@@ -278,14 +286,9 @@ export default function CashLunakPage() {
           jumlah_dp: form.jumlah_dp,
           tenor: form.tenor,
           keterangan: form.keterangan,
-          cicilan: [],
-          dokumen: null,
-          created_at: now,
-          updated_at: now,
         });
       }
-      saveCashLunak(all);
-      refresh();
+      loadData();
       closeModal();
       showToast(modalMode === "edit" ? "Data berhasil diperbarui" : "Data berhasil ditambahkan");
     } catch (e: any) {
@@ -294,12 +297,11 @@ export default function CashLunakPage() {
   };
 
   // Delete
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (!canEdit) { showToast("Anda tidak memiliki izin", "error"); return; }
     try {
-      const all = getCashLunak().filter(x => x.id !== id);
-      saveCashLunak(all);
-      refresh();
+      await cashLunakApi.delete(id);
+      loadData();
       setConfirmId(null);
       showToast("Data berhasil dihapus");
     } catch (e: any) {
@@ -308,10 +310,10 @@ export default function CashLunakPage() {
   };
 
   // Add cicilan
-  const handleAddCicilan = () => {
+  const handleAddCicilan = async () => {
     if (!canEdit) { showToast("Anda tidak memiliki izin", "error"); return; }
     if (!selectedId) return;
-    const all = getCashLunak();
+    const all = allData;
     const idx = all.findIndex(x => x.id === selectedId);
     if (idx === -1) return;
     const item = all[idx];
@@ -321,17 +323,13 @@ export default function CashLunakPage() {
     if (cicilanForm.jumlah_bayar > c.sisaBayar) {
       showToast(`Jumlah bayar melebihi sisa (${formatRupiah(c.sisaBayar)})`, "error"); return;
     }
-    const newCicilan: Cicilan = {
-      id: generateId(),
-      tanggal_bayar: cicilanForm.tanggal_bayar,
-      jumlah_bayar: cicilanForm.jumlah_bayar,
-      keterangan: cicilanForm.keterangan,
-    };
-    item.cicilan = [...(item.cicilan || []), newCicilan];
-    item.updated_at = new Date().toISOString();
     try {
-      saveCashLunak(all);
-      refresh();
+      await cashLunakApi.addCicilan(selectedId, {
+        tanggal_bayar: cicilanForm.tanggal_bayar,
+        jumlah_bayar: cicilanForm.jumlah_bayar,
+        keterangan: cicilanForm.keterangan,
+      });
+      loadData();
       setCicilanForm({ tanggal_bayar: new Date().toISOString().slice(0, 10), jumlah_bayar: 0, keterangan: "" });
       showToast("Pembayaran berhasil dicatat");
     } catch (e: any) {
@@ -340,16 +338,11 @@ export default function CashLunakPage() {
   };
 
   // Delete cicilan
-  const handleDeleteCicilan = (cicilanId: string) => {
+  const handleDeleteCicilan = async (cicilanId: string) => {
     if (!selectedId) return;
-    const all = getCashLunak();
-    const idx = all.findIndex(x => x.id === selectedId);
-    if (idx === -1) return;
-    all[idx].cicilan = (all[idx].cicilan || []).filter(c => c.id !== cicilanId);
-    all[idx].updated_at = new Date().toISOString();
     try {
-      saveCashLunak(all);
-      refresh();
+      await cashLunakApi.deleteCicilan(selectedId, cicilanId);
+      loadData();
       setConfirmCicilanId(null);
       showToast("Cicilan berhasil dihapus");
     } catch (e: any) {
@@ -470,6 +463,10 @@ export default function CashLunakPage() {
         <p className="text-muted-foreground text-sm">Anda tidak memiliki izin untuk mengakses halaman ini.</p>
       </div>
     );
+  }
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground">Memuat data cash lunak...</div>;
   }
 
   return (

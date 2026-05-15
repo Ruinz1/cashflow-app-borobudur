@@ -16,10 +16,6 @@ class Transaction extends Model
     protected $fillable = [
         'id',
         'division_id',
-        'category_id',
-        'jenis_transaksi',
-        'deskripsi',
-        'nominal',
         'tanggal',
         'uraian',
         'rencana',
@@ -27,22 +23,14 @@ class Transaction extends Model
         'uang_keluar',
         'saldo_akhir',
         'keterangan',
-        'nota_nama',
-        'nota_tipe',
-        'nota_data',
         'created_by',
-        'created_at',
-        'updated_at',
     ];
 
     protected $casts = [
-        'nominal' => 'float',
-        'rencana' => 'float',
-        'uang_masuk' => 'float',
+        'rencana'     => 'float',
+        'uang_masuk'  => 'float',
         'uang_keluar' => 'float',
         'saldo_akhir' => 'float',
-        'created_at' => 'datetime',
-        'updated_at' => 'datetime',
     ];
 
     public function division()
@@ -50,13 +38,8 @@ class Transaction extends Model
         return $this->belongsTo(Division::class);
     }
 
-    public function category()
+    public function notes()
     {
-        return $this->belongsTo(Category::class);
-    }
-
-    public function attachments()
-    {
-        return $this->hasMany(Attachment::class);
+        return $this->hasMany(TransactionNote::class);
     }
 }

@@ -3,17 +3,21 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Transaction;
 use App\Models\Division;
+use App\Models\SaldoAwalDivisi;
+use App\Models\Transaction;
+use App\Models\TransactionNote;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
-use Illuminate\Support\Facades\DB;
 
 class TransactionController extends Controller
 {
+    /**
+     * GET /api/transactions/{division}?month=3&year=2026
+     */
     public function index(Request $request, $division = null)
     {
-        $query = Transaction::with(['division', 'category']);
+        $query = Transaction::with('notes');
 
         if ($division) {
             $divisionModel = Division::where('kode_divisi', $division)->firstOrFail();
@@ -23,120 +27,174 @@ class TransactionController extends Controller
         if ($request->has('month') && $request->month) {
             $query->whereRaw('MONTH(tanggal) = ?', [$request->month]);
         }
-
         if ($request->has('year') && $request->year) {
             $query->whereRaw('YEAR(tanggal) = ?', [$request->year]);
         }
 
-        $transactions = $query->orderBy('tanggal', 'desc')->get();
+        $transactions = $query->orderBy('tanggal')->orderBy('created_at')->get();
 
-        return response()->json($transactions);
+        return response()->json($transactions->map(fn($t) => $this->format($t)));
     }
 
+    /**
+     * POST /api/transactions/{division}
+     */
     public function store(Request $request, $division = null)
     {
         $request->validate([
-            'tanggal' => 'required|date',
-            'uraian' => 'required|string',
-            'rencana' => 'nullable|numeric',
+            'tanggal'    => 'required|string',
+            'uraian'     => 'required|string',
+            'rencana'    => 'nullable|numeric',
             'uang_masuk' => 'nullable|numeric',
-            'uang_keluar' => 'nullable|numeric',
+            'uang_keluar'=> 'nullable|numeric',
             'keterangan' => 'nullable|string',
-            'category_id' => 'nullable|exists:categories,id',
         ]);
 
-        if ($division) {
-            $divisionModel = Division::where('kode_divisi', $division)->firstOrFail();
-            $divisionId = $divisionModel->id;
-        } else {
-            $request->validate(['division_id' => 'required|exists:divisions,id']);
-            $divisionId = $request->division_id;
-        }
+        $divisionModel = Division::where('kode_divisi', $division)->firstOrFail();
 
         $transaction = Transaction::create([
-            'id' => Str::uuid(),
-            'division_id' => $divisionId,
-            'category_id' => $request->category_id,
-            'jenis_transaksi' => 'umum',
-            'deskripsi' => $request->uraian,
-            'nominal' => $request->uang_masuk - $request->uang_keluar,
-            'tanggal' => $request->tanggal,
-            'uraian' => $request->uraian,
-            'rencana' => $request->rencana ?? 0,
-            'uang_masuk' => $request->uang_masuk ?? 0,
+            'id'          => Str::uuid(),
+            'division_id' => $divisionModel->id,
+            'tanggal'     => $request->tanggal,
+            'uraian'      => $request->uraian,
+            'rencana'     => $request->rencana ?? 0,
+            'uang_masuk'  => $request->uang_masuk ?? 0,
             'uang_keluar' => $request->uang_keluar ?? 0,
-            'saldo_akhir' => 0, // perlu recalculate
-            'keterangan' => $request->keterangan,
-            'created_by' => $request->user()->id ?? null,
+            'saldo_akhir' => 0,
+            'keterangan'  => $request->keterangan,
+            'created_by'  => $request->user()?->id,
         ]);
 
-        // Recalculate saldo
-        $this->recalculateSaldo($divisionId);
+        // Handle notes/attachments
+        if ($request->has('notas') && is_array($request->notas)) {
+            foreach ($request->notas as $nota) {
+                TransactionNote::create([
+                    'id'             => Str::uuid(),
+                    'transaction_id' => $transaction->id,
+                    'nama'           => $nota['nama'] ?? 'file',
+                    'tipe'           => $nota['tipe'] ?? 'application/octet-stream',
+                    'data'           => $nota['data'] ?? '',
+                ]);
+            }
+        }
 
-        return response()->json($transaction, 201);
+        $this->recalculateSaldo($divisionModel->id);
+        $transaction->refresh()->load('notes');
+
+        return response()->json($this->format($transaction), 201);
     }
 
-    public function show(string $id)
+    /**
+     * GET /api/transactions/{division}/{id}
+     */
+    public function show(Request $request, $division, $id)
     {
-        $transaction = Transaction::with(['division', 'category'])->findOrFail($id);
-        return response()->json($transaction);
+        $transaction = Transaction::with('notes')->findOrFail($id);
+        return response()->json($this->format($transaction));
     }
 
-    public function update(Request $request, string $id)
+    /**
+     * PUT /api/transactions/{division}/{id}
+     */
+    public function update(Request $request, $division, $id)
     {
         $transaction = Transaction::findOrFail($id);
 
         $request->validate([
-            'tanggal' => 'required|date',
-            'uraian' => 'required|string',
-            'rencana' => 'nullable|numeric',
+            'tanggal'    => 'required|string',
+            'uraian'     => 'required|string',
+            'rencana'    => 'nullable|numeric',
             'uang_masuk' => 'nullable|numeric',
-            'uang_keluar' => 'nullable|numeric',
+            'uang_keluar'=> 'nullable|numeric',
             'keterangan' => 'nullable|string',
-            'category_id' => 'nullable|exists:categories,id',
         ]);
 
         $transaction->update([
-            'category_id' => $request->category_id,
-            'deskripsi' => $request->uraian,
-            'nominal' => $request->uang_masuk - $request->uang_keluar,
-            'tanggal' => $request->tanggal,
-            'uraian' => $request->uraian,
-            'rencana' => $request->rencana ?? 0,
-            'uang_masuk' => $request->uang_masuk ?? 0,
+            'tanggal'     => $request->tanggal,
+            'uraian'      => $request->uraian,
+            'rencana'     => $request->rencana ?? 0,
+            'uang_masuk'  => $request->uang_masuk ?? 0,
             'uang_keluar' => $request->uang_keluar ?? 0,
-            'keterangan' => $request->keterangan,
+            'keterangan'  => $request->keterangan,
         ]);
 
-        // Recalculate saldo
-        $this->recalculateSaldo($transaction->division_id);
+        // Replace notes if provided
+        if ($request->has('notas')) {
+            $transaction->notes()->delete();
+            if (is_array($request->notas)) {
+                foreach ($request->notas as $nota) {
+                    TransactionNote::create([
+                        'id'             => Str::uuid(),
+                        'transaction_id' => $transaction->id,
+                        'nama'           => $nota['nama'] ?? 'file',
+                        'tipe'           => $nota['tipe'] ?? 'application/octet-stream',
+                        'data'           => $nota['data'] ?? '',
+                    ]);
+                }
+            }
+        }
 
-        return response()->json($transaction);
+        $this->recalculateSaldo($transaction->division_id);
+        $transaction->refresh()->load('notes');
+
+        return response()->json($this->format($transaction));
     }
 
-    public function destroy(string $id)
+    /**
+     * DELETE /api/transactions/{division}/{id}
+     */
+    public function destroy(Request $request, $division, $id)
     {
         $transaction = Transaction::findOrFail($id);
-        $divisionId = $transaction->division_id;
-        $transaction->delete();
+        $divisionId  = $transaction->division_id;
+        $transaction->delete(); // cascade deletes notes
 
-        // Recalculate saldo
         $this->recalculateSaldo($divisionId);
 
-        return response()->json(['message' => 'Transaction deleted']);
+        return response()->json(['message' => 'Transaksi dihapus']);
     }
 
-    private function recalculateSaldo($divisionId)
+    private function recalculateSaldo(string $divisionId)
     {
+        $division  = Division::find($divisionId);
+        $saldoAwal = 0;
+        if ($division) {
+            $saldoRow = SaldoAwalDivisi::where('kode_divisi', $division->kode_divisi)->first();
+            $saldoAwal = $saldoRow ? (float) $saldoRow->nominal : 0;
+        }
+
         $transactions = Transaction::where('division_id', $divisionId)
             ->orderBy('tanggal')
             ->orderBy('created_at')
             ->get();
 
-        $saldo = 0;
-        foreach ($transactions as $transaction) {
-            $saldo += $transaction->uang_masuk - $transaction->uang_keluar;
-            $transaction->update(['saldo_akhir' => $saldo]);
+        $saldo = $saldoAwal;
+        foreach ($transactions as $t) {
+            $saldo += $t->uang_masuk - $t->uang_keluar;
+            $t->update(['saldo_akhir' => $saldo]);
         }
+    }
+
+    private function format(Transaction $t): array
+    {
+        $notas = $t->notes->map(fn($n) => [
+            'id'   => $n->id,
+            'nama' => $n->nama,
+            'tipe' => $n->tipe,
+            'data' => $n->data,
+        ])->values()->all();
+
+        return [
+            'id'          => $t->id,
+            'tanggal'     => $t->tanggal,
+            'uraian'      => $t->uraian,
+            'rencana'     => (float) $t->rencana,
+            'uang_masuk'  => (float) $t->uang_masuk,
+            'uang_keluar' => (float) $t->uang_keluar,
+            'saldo_akhir' => (float) $t->saldo_akhir,
+            'keterangan'  => $t->keterangan ?? '',
+            'notas'       => $notas,
+            'nota'        => count($notas) > 0 ? $notas[0] : null, // backward compat
+        ];
     }
 }

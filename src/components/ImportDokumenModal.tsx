@@ -2,7 +2,8 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import {
   parseFile, ParsedRow, ParseResult, SUPPORTED_EXTENSIONS, MAX_FILE_SIZE_BYTES,
 } from "@/lib/importParser";
-import { tambahImportedRows, ImportableUnit, formatRupiah } from "@/lib/storage";
+import { ImportableUnit, formatRupiah } from "@/lib/types";
+import { importDokumenApi } from "@/lib/api";
 import { UploadCloud, FileSpreadsheet, FileText, X, AlertCircle, Trash2, Loader2, CheckCircle2 } from "lucide-react";
 
 type Props = {
@@ -93,14 +94,14 @@ export default function ImportDokumenModal({ unit, open, onClose, onImported, cr
   const totalDebit = selectedRows.reduce((s, r) => s + (r.debit || 0), 0);
   const totalKredit = selectedRows.reduce((s, r) => s + (r.kredit || 0), 0);
 
-  const handleImport = useCallback(() => {
+  const handleImport = useCallback(async () => {
     if (!file) return;
     if (selectedRows.length === 0) { setError("Pilih minimal 1 baris untuk diimport."); return; }
     const invalid = selectedRows.find(r => !r.tanggal || (!r.debit && !r.kredit) || !r.keterangan);
     if (invalid) { setError("Ada baris terpilih yang masih invalid (tanggal/keterangan/nominal). Perbaiki dulu."); return; }
     setImporting(true);
     try {
-      const res = tambahImportedRows(unit, selectedRows.map(r => ({
+      const res = await importDokumenApi.bulkCreate(unit, selectedRows.map(r => ({
         tanggal: r.tanggal,
         keterangan: r.keterangan,
         kategori: r.kategori,
@@ -108,8 +109,7 @@ export default function ImportDokumenModal({ unit, open, onClose, onImported, cr
         kredit: r.kredit,
         saldo: r.saldo,
         catatan: r.catatan,
-        source_file: file.name,
-      })), file.name, createdBy);
+      })), file.name);
       onImported(res.ditambahkan, res.dilewati);
       onClose();
     } catch (e: any) {

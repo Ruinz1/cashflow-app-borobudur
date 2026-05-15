@@ -1,10 +1,10 @@
 import { useState, useMemo, useCallback, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  getProgresTukang, saveProgresTukang, migrateProgresTukang,
   generateId, formatDate, calcProgresTukang,
   ProgresTukang, HistoriProgres, StatusKontrak,
-} from "@/lib/storage";
+} from "@/lib/types";
+import { progresTukangApi } from "@/lib/api";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   PieChart, Pie, Cell,
@@ -83,14 +83,8 @@ export default function ProgresTukangPage() {
   const access = hasAccess("progrestukang");
   const canEdit = access === "CRUD";
 
-  // Run migration once on mount before initial state load is completed
-  useEffect(() => {
-    migrateProgresTukang();
-    setProgresData(getProgresTukang());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const [progresData, setProgresData] = useState<ProgresTukang[]>(getProgresTukang());
+  const [progresData, setProgresData] = useState<ProgresTukang[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
@@ -98,9 +92,19 @@ export default function ProgresTukangPage() {
     setTimeout(() => setToast(null), 3000);
   }, []);
 
-  const refresh = () => {
-    setProgresData(getProgresTukang());
-  };
+  const loadData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const data = await progresTukangApi.list();
+      setProgresData(data);
+    } catch (e) {
+      console.error("Gagal load progres tukang", e);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadData(); }, [loadData]);
 
   // ===== Filter state =====
   const [filterCariNama, setFilterCariNama] = useState("");
@@ -215,7 +219,7 @@ export default function ProgresTukangPage() {
     setShowKontrakModal(true);
   };
 
-  const handleSaveKontrak = () => {
+  const handleSaveKontrak = async () => {
     const namaTrim = kontrakForm.nama_tukang.trim();
     const lokasiTrim = kontrakForm.lokasi.trim();
     if (!namaTrim || namaTrim.length < 3) { showToast("Nama tukang minimal 3 karakter.", "error"); return; }
@@ -225,52 +229,39 @@ export default function ProgresTukangPage() {
     if (kontrakForm.total_kontrak <= 0) { showToast("Total kontrak harus > 0.", "error"); return; }
     if (!kontrakForm.tanggal_mulai) { showToast("Tanggal mulai wajib diisi.", "error"); return; }
 
-    const all = getProgresTukang();
-    const now = new Date().toISOString();
-    if (kontrakEditId) {
-      const idx = all.findIndex(p => p.id === kontrakEditId);
-      if (idx >= 0) {
-        const oldKontrak = all[idx].total_kontrak;
-        if (oldKontrak !== kontrakForm.total_kontrak && (all[idx].histori_progres || []).length > 0) {
+    try {
+      if (kontrakEditId) {
+        const p = progresData.find(x => x.id === kontrakEditId);
+        if (p && p.total_kontrak !== kontrakForm.total_kontrak && (p.histori_progres || []).length > 0) {
           const ok = window.confirm("Mengubah nilai kontrak akan mempengaruhi kalkulasi Sisa Progres dan persentase selesai. Histori progres yang sudah ada tidak akan berubah. Lanjutkan?");
           if (!ok) return;
         }
-        const calc = calcProgresTukang({ total_kontrak: kontrakForm.total_kontrak, histori_progres: all[idx].histori_progres });
-        all[idx] = {
-          ...all[idx],
+        await progresTukangApi.update(kontrakEditId, {
           nama_tukang: namaTrim,
           lokasi: lokasiTrim,
           total_kontrak: kontrakForm.total_kontrak,
           tanggal_mulai: kontrakForm.tanggal_mulai,
           estimasi_selesai: kontrakForm.estimasi_selesai,
           keterangan: kontrakForm.keterangan,
-          ...calc,
-          updated_at: now,
-        };
+        });
+      } else {
+        await progresTukangApi.create({
+          nama_tukang: namaTrim,
+          lokasi: lokasiTrim,
+          total_kontrak: kontrakForm.total_kontrak,
+          tanggal_mulai: kontrakForm.tanggal_mulai,
+          estimasi_selesai: kontrakForm.estimasi_selesai,
+          keterangan: kontrakForm.keterangan,
+        });
       }
-    } else {
-      const calc = calcProgresTukang({ total_kontrak: kontrakForm.total_kontrak, histori_progres: [] });
-      all.unshift({
-        id: "progres-" + generateId(),
-        nama_tukang: namaTrim,
-        lokasi: lokasiTrim,
-        total_kontrak: kontrakForm.total_kontrak,
-        tanggal_mulai: kontrakForm.tanggal_mulai,
-        estimasi_selesai: kontrakForm.estimasi_selesai,
-        keterangan: kontrakForm.keterangan,
-        histori_progres: [],
-        ...calc,
-        created_at: now,
-        updated_at: now,
-        created_by: user?.username || "",
-      });
+      loadData();
+      setShowKontrakModal(false);
+      showToast(kontrakEditId
+        ? `Kontrak ${namaTrim} di lokasi ${lokasiTrim} berhasil diperbarui!`
+        : `Kontrak ${namaTrim} berhasil ditambahkan untuk lokasi ${lokasiTrim}!`);
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menyimpan", "error");
     }
-    try { saveProgresTukang(all); } catch (e: any) { showToast(e?.message || "Gagal menyimpan", "error"); return; }
-    refresh();
-    setShowKontrakModal(false);
-    showToast(kontrakEditId
-      ? `Kontrak ${namaTrim} di lokasi ${lokasiTrim} berhasil diperbarui!`
-      : `Kontrak ${namaTrim} berhasil ditambahkan untuk lokasi ${lokasiTrim}!`);
   };
 
   // ===== Modal: Detail =====
@@ -308,7 +299,7 @@ export default function ProgresTukangPage() {
     }
   };
 
-  const handleSaveProgres = () => {
+  const handleSaveProgres = async () => {
     if (!historiItem) return;
     if (progresForm.nominal <= 0) { showToast("Nominal progres harus > 0.", "error"); return; }
     if (progresForm.nominal > historiItem.sisa_progres) {
@@ -320,53 +311,50 @@ export default function ProgresTukangPage() {
     if (blokTrim.length > 150) { showToast("Blok maksimal 150 karakter.", "error"); return; }
     if (!progresForm.tanggal) { showToast("Tanggal progres wajib diisi.", "error"); return; }
 
-    const all = getProgresTukang();
-    const idx = all.findIndex(p => p.id === historiItem.id);
-    if (idx < 0) return;
-    const newHistori: HistoriProgres = {
-      id_progres: "hp-" + generateId(),
-      tanggal: progresForm.tanggal,
-      minggu_ke: (all[idx].histori_progres?.length || 0) + 1,
-      nominal: progresForm.nominal,
-      blok: blokTrim,
-      foto: progresForm.foto,
-    };
-    const newHistArr = [...(all[idx].histori_progres || []), newHistori];
-    const calc = calcProgresTukang({ total_kontrak: all[idx].total_kontrak, histori_progres: newHistArr });
-    all[idx] = { ...all[idx], histori_progres: newHistArr, ...calc, updated_at: new Date().toISOString() };
-    try { saveProgresTukang(all); } catch (e: any) { showToast(e?.message || "Gagal menyimpan", "error"); return; }
-    setHistoriItem(all[idx]);
-    refresh();
-    showToast(`Progres minggu ke-${newHistori.minggu_ke} sebesar ${progrestukang_formatRupiah(newHistori.nominal)} berhasil dicatat!`);
-    setProgresForm({ tanggal: new Date().toISOString().slice(0, 10), nominal: all[idx].sisa_progres, blok: "", foto: null });
+    try {
+      await progresTukangApi.addHistori(historiItem.id, {
+        tanggal: progresForm.tanggal,
+        minggu_ke: (historiItem.histori_progres?.length || 0) + 1,
+        nominal: progresForm.nominal,
+        blok: blokTrim,
+        foto: progresForm.foto || undefined,
+      });
+      loadData();
+      showToast(`Progres berhasil dicatat!`);
+      setProgresForm({ tanggal: new Date().toISOString().slice(0, 10), nominal: 0, blok: "", foto: null });
+      setHistoriItem(null); // Close modal to reflect fresh data later
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menyimpan", "error");
+    }
   };
 
-  const handleDeleteHistori = (h: HistoriProgres) => {
+  const handleDeleteHistori = async (h: HistoriProgres) => {
     if (!historiItem) return;
     const ok = window.confirm(`Hapus data progres minggu ke-${h.minggu_ke} sebesar ${progrestukang_formatRupiah(h.nominal)} untuk blok ${h.blok || "-"}? Total terbayar dan sisa akan dihitung ulang otomatis.`);
     if (!ok) return;
-    const all = getProgresTukang();
-    const idx = all.findIndex(p => p.id === historiItem.id);
-    if (idx < 0) return;
-    const newHistArr = (all[idx].histori_progres || []).filter(x => x.id_progres !== h.id_progres)
-      .map((x, i) => ({ ...x, minggu_ke: i + 1 }));
-    const calc = calcProgresTukang({ total_kontrak: all[idx].total_kontrak, histori_progres: newHistArr });
-    all[idx] = { ...all[idx], histori_progres: newHistArr, ...calc, updated_at: new Date().toISOString() };
-    saveProgresTukang(all);
-    setHistoriItem(all[idx]);
-    refresh();
-    showToast("Data progres berhasil dihapus.");
+    
+    try {
+      await progresTukangApi.deleteHistori(historiItem.id, h.id_progres);
+      loadData();
+      setHistoriItem(null); // close modal to prevent stale state
+      showToast("Data progres berhasil dihapus.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menghapus", "error");
+    }
   };
 
   // ===== Delete Kontrak =====
   const [confirmDel, setConfirmDel] = useState<ProgresTukang | null>(null);
-  const handleDeleteKontrak = () => {
+  const handleDeleteKontrak = async () => {
     if (!confirmDel) return;
-    const all = getProgresTukang().filter(p => p.id !== confirmDel.id);
-    saveProgresTukang(all);
-    refresh();
-    setConfirmDel(null);
-    showToast("Kontrak berhasil dihapus.");
+    try {
+      await progresTukangApi.delete(confirmDel.id);
+      loadData();
+      setConfirmDel(null);
+      showToast("Kontrak berhasil dihapus.");
+    } catch (e: any) {
+      showToast(e?.message || "Gagal menghapus", "error");
+    }
   };
 
   // ===== Rekap per Tukang =====
@@ -594,6 +582,10 @@ export default function ProgresTukangPage() {
         <p className="text-muted-foreground text-sm">Anda tidak memiliki izin untuk mengakses halaman ini.</p>
       </div>
     );
+  }
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground">Memuat progres tukang...</div>;
   }
 
   return (
