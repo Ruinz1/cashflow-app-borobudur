@@ -44,6 +44,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // ── Transaksi Cashflow ────────────────────────────────────────────────────
     Route::get('/transactions',                        [TransactionController::class, 'index']);
+    Route::get('/transactions/nota/{id}',              [TransactionController::class, 'getNota']);
     Route::get('/transactions/{division}',             [TransactionController::class, 'index']);
     Route::post('/transactions/{division}',            [TransactionController::class, 'store']);
     Route::get('/transactions/{division}/{id}',        [TransactionController::class, 'show']);

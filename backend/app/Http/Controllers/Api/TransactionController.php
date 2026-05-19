@@ -81,7 +81,7 @@ class TransactionController extends Controller
         $this->recalculateSaldo($divisionModel->id);
         $transaction->refresh()->load('notes');
 
-        return response()->json($this->format($transaction), 201);
+        return response()->json($this->format($transaction, true), 201);
     }
 
     /**
@@ -90,7 +90,7 @@ class TransactionController extends Controller
     public function show(Request $request, $division, $id)
     {
         $transaction = Transaction::with('notes')->findOrFail($id);
-        return response()->json($this->format($transaction));
+        return response()->json($this->format($transaction, true));
     }
 
     /**
@@ -137,7 +137,7 @@ class TransactionController extends Controller
         $this->recalculateSaldo($transaction->division_id);
         $transaction->refresh()->load('notes');
 
-        return response()->json($this->format($transaction));
+        return response()->json($this->format($transaction, true));
     }
 
     /**
@@ -152,6 +152,20 @@ class TransactionController extends Controller
         $this->recalculateSaldo($divisionId);
 
         return response()->json(['message' => 'Transaksi dihapus']);
+    }
+
+    /**
+     * GET /api/transactions/nota/{id}
+     */
+    public function getNota($id)
+    {
+        $nota = TransactionNote::findOrFail($id);
+        return response()->json([
+            'id' => $nota->id,
+            'nama' => $nota->nama,
+            'tipe' => $nota->tipe,
+            'data' => $nota->data,
+        ]);
     }
 
     private function recalculateSaldo(string $divisionId)
@@ -175,13 +189,13 @@ class TransactionController extends Controller
         }
     }
 
-    private function format(Transaction $t): array
+    private function format(Transaction $t, bool $includeNotaData = false): array
     {
         $notas = $t->notes->map(fn($n) => [
             'id'   => $n->id,
             'nama' => $n->nama,
             'tipe' => $n->tipe,
-            'data' => $n->data,
+            'data' => $includeNotaData ? $n->data : null,
         ])->values()->all();
 
         return [

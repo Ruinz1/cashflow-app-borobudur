@@ -203,20 +203,28 @@ export default function DivisiPage() {
     setShowModal(true);
   };
 
-  const handleOpenEdit = (t: Transaksi) => {
-    setEditId(t.id);
-    const notas = t.notas && t.notas.length > 0 ? t.notas : (t.nota ? [t.nota] : []);
-    setForm({
-      tanggal: t.tanggal,
-      uraian: t.uraian,
-      rencana: t.rencana,
-      uang_masuk: t.uang_masuk,
-      uang_keluar: t.uang_keluar,
-      keterangan: t.keterangan,
-      nota: notas[0] || null,
-      notas,
-    });
-    setShowModal(true);
+  const handleOpenEdit = async (t: Transaksi) => {
+    try {
+      setIsLoadingData(true);
+      const fullT = await transaksiApi.show(divisi, t.id);
+      const notas = fullT.notas && fullT.notas.length > 0 ? fullT.notas : (fullT.nota ? [fullT.nota] : []);
+      setEditId(fullT.id);
+      setForm({
+        tanggal: fullT.tanggal,
+        uraian: fullT.uraian,
+        rencana: fullT.rencana,
+        uang_masuk: fullT.uang_masuk,
+        uang_keluar: fullT.uang_keluar,
+        keterangan: fullT.keterangan,
+        nota: notas[0] || null,
+        notas,
+      });
+      setShowModal(true);
+    } catch (err) {
+      showToast("Gagal memuat detail transaksi", "error");
+    } finally {
+      setIsLoadingData(false);
+    }
   };
 
   const handleSave = async () => {
@@ -259,14 +267,25 @@ export default function DivisiPage() {
     }
   };
 
-  const handleViewNota = (nota: NotaItem) => {
-    if (!nota.data) return;
+  const handleViewNota = async (nota: NotaItem) => {
+    let dataStr = nota.data;
+    if (!dataStr) {
+      try {
+        const fullNota = await transaksiApi.getNota(nota.id!);
+        dataStr = fullNota.data;
+      } catch (err) {
+        showToast("Gagal memuat nota", "error");
+        return;
+      }
+    }
+    if (!dataStr) return;
+
     if (nota.tipe.startsWith("image/")) {
       const win = window.open();
-      win?.document.write(`<img src="${nota.data}" style="max-width:100%;"/>`);
+      win?.document.write(`<img src="${dataStr}" style="max-width:100%;"/>`);
     } else {
       const link = document.createElement("a");
-      link.href = nota.data;
+      link.href = dataStr;
       link.download = nota.nama;
       link.click();
     }
@@ -754,8 +773,8 @@ export default function DivisiPage() {
                         return (
                           <div className="flex flex-col gap-1">
                             {notaList.map((n, i) => (
-                              <button key={i} onClick={() => handleViewNota(n)} disabled={!n.data}
-                                className="flex items-center gap-1 text-xs text-blue-500 hover:underline disabled:opacity-40 disabled:no-underline text-left"
+                              <button key={i} onClick={() => handleViewNota(n)}
+                                className="flex items-center gap-1 text-xs text-blue-500 hover:underline text-left"
                                 title={n.nama}>
                                 <Eye className="w-3 h-3 shrink-0" />
                                 <span className="truncate max-w-[90px]">{n.nama}</span>

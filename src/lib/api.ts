@@ -114,8 +114,10 @@ export const transaksiApi = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+  show: (divisi: DivisiKey, id: string) => apiFetch<Transaksi>(`/transactions/${divisi}/${id}`),
   delete: (divisi: DivisiKey, id: string) =>
     apiFetch<{ message: string }>(`/transactions/${divisi}/${id}`, { method: 'DELETE' }),
+  getNota: (id: string) => apiFetch<NotaItem>(`/transactions/nota/${id}`),
 };
 
 // ─── Data Akad ───────────────────────────────────────────────────────────────
