@@ -31,6 +31,7 @@ async function apiFetch<T>(
   const token = getToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'Accept': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;

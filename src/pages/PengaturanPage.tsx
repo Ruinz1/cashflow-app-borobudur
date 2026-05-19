@@ -357,7 +357,7 @@ export default function PengaturanPage() {
                 <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}
                   className="w-full px-3 py-2 rounded-xl border text-sm bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                   style={{ borderColor: "hsl(var(--border))" }} data-testid="select-role"
-                  disabled={user?.role === "admin" && editId !== null && getUsers().find(u => u.id === editId)?.role === "owner"}>
+                  disabled={user?.role === "admin" && editId !== null && users.find(u => u.id === editId)?.role === "owner"}>
                   {ROLES.map(r => <option key={r.val} value={r.val}>{r.label}</option>)}
                 </select>
               </div>

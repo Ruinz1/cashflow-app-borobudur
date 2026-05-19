@@ -41,9 +41,8 @@ class DashboardController extends Controller
                 continue;
             }
 
-            $transactions = Transaction::where('division_id', $division->id)->get();
-            $masuk   = (float) $transactions->sum('uang_masuk');
-            $keluar  = (float) $transactions->sum('uang_keluar');
+            $masuk   = (float) Transaction::where('division_id', $division->id)->sum('uang_masuk');
+            $keluar  = (float) Transaction::where('division_id', $division->id)->sum('uang_keluar');
             $saldoAk = $saldoAwal + $masuk - $keluar;
 
             $divisiSummary[$kode] = [
