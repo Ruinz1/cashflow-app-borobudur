@@ -18,6 +18,7 @@ use App\Http\Controllers\Api\SaldoManualController;
 use App\Http\Controllers\Api\ImportDokumenController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\FotoBuktiController;
 
 // ─── Auth (public) ────────────────────────────────────────────────────────────
 Route::post('/login', [AuthController::class, 'login']);
@@ -91,4 +92,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/reports/monthly',           [ReportController::class, 'monthly']);
     Route::get('/reports/yearly',            [ReportController::class, 'yearly']);
     Route::get('/reports/division/{division}',[ReportController::class, 'division']);
+
+    // ── Foto Bukti Transaksi (WebP Upload) ────────────────────────────────────
+    // Contoh endpoint upload gambar dengan konversi WebP otomatis.
+    // Upload via multipart/form-data dengan field 'foto'.
+    Route::apiResource('foto-bukti', FotoBuktiController::class);
 });
