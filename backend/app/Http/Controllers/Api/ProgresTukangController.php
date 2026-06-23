@@ -90,6 +90,15 @@ class ProgresTukangController extends Controller
             'nominal'   => 'required|numeric|min:0',
         ]);
 
+        $fotos = [];
+        if ($request->has('fotos')) {
+            $fotos = $request->input('fotos');
+        } elseif ($request->has('foto') && $request->input('foto')) {
+            $fotos = [$request->input('foto')];
+        }
+
+        $firstFoto = count($fotos) > 0 ? $fotos[0] : null;
+
         $histori = HistoriProgresTukang::create([
             'id'                => Str::uuid(),
             'progres_tukang_id' => $tukang->id,
@@ -97,10 +106,10 @@ class ProgresTukangController extends Controller
             'minggu_ke'         => $request->minggu_ke,
             'nominal'           => $request->nominal,
             'blok'              => $request->blok ?? '',
-            'foto_nama_file'    => $request->input('foto.nama_file'),
-            'foto_tipe'         => $request->input('foto.tipe'),
-            'foto_ukuran'       => $request->input('foto.ukuran'),
-            'foto_data_base64'  => $request->input('foto.data_base64'),
+            'foto_nama_file'    => $firstFoto ? ($firstFoto['nama_file'] ?? '') : null,
+            'foto_tipe'         => $firstFoto ? ($firstFoto['tipe'] ?? '') : null,
+            'foto_ukuran'       => $firstFoto ? ($firstFoto['ukuran'] ?? null) : null,
+            'foto_data_base64'  => count($fotos) > 0 ? json_encode($fotos) : null,
         ]);
 
         $this->recalculate($tukang);
@@ -164,9 +173,19 @@ class ProgresTukangController extends Controller
 
     private function formatHistori(HistoriProgresTukang $h): array
     {
-        $foto = null;
-        if ($h->foto_nama_file) {
-            $foto = [
+        $fotos = [];
+        $isJsonList = false;
+
+        if ($h->foto_data_base64 && str_starts_with(trim($h->foto_data_base64), '[')) {
+            $decoded = json_decode($h->foto_data_base64, true);
+            if (is_array($decoded)) {
+                $isJsonList = true;
+                $fotos = $decoded;
+            }
+        }
+
+        if (!$isJsonList && $h->foto_nama_file) {
+            $fotos[] = [
                 'nama_file'    => $h->foto_nama_file,
                 'tipe'         => $h->foto_tipe,
                 'ukuran'       => (int) $h->foto_ukuran,
@@ -180,7 +199,8 @@ class ProgresTukangController extends Controller
             'minggu_ke'  => (int) $h->minggu_ke,
             'nominal'    => (float) $h->nominal,
             'blok'       => $h->blok,
-            'foto'       => $foto,
+            'foto'       => count($fotos) > 0 ? $fotos[0] : null,
+            'fotos'      => $fotos,
         ];
     }
 }

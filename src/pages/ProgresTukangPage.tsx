@@ -13,6 +13,7 @@ import {
   Plus, Pencil, Trash2, Eye, ClipboardList, FileDown, FileSpreadsheet, Printer,
   Search, Users, Hammer, AlertCircle, X, ChevronLeft, ChevronRight, Image as ImageIcon, FileText,
 } from "lucide-react";
+import ImageLightbox, { type LightboxImage } from "@/components/ImageLightbox";
 
 // ===== Helpers =====
 function progrestukang_formatRupiah(value: number | null | undefined): string {
@@ -77,6 +78,72 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+function compressAndConvertToWebp(file: File, maxWidth = 1200, quality = 0.8): Promise<{ data_base64: string; tipe: string; nama_file: string }> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith("image/")) {
+      const r = new FileReader();
+      r.onload = () => resolve({
+        data_base64: r.result as string,
+        tipe: file.type,
+        nama_file: file.name
+      });
+      r.onerror = () => reject(r.error || new Error("Gagal membaca file"));
+      r.readAsDataURL(file);
+      return;
+    }
+
+    const r = new FileReader();
+    r.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth || height > maxWidth) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxWidth) / height);
+            height = maxWidth;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          reject(new Error("Gagal mendapatkan context 2D"));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        let dataUrl = canvas.toDataURL("image/webp", quality);
+        let tipe = "image/webp";
+        let namaWebp = file.name.replace(/\.[^/.]+$/, "") + ".webp";
+
+        if (!dataUrl.startsWith("data:image/webp")) {
+          dataUrl = canvas.toDataURL("image/jpeg", quality);
+          tipe = "image/jpeg";
+          namaWebp = file.name.replace(/\.[^/.]+$/, "") + ".jpg";
+        }
+
+        resolve({
+          data_base64: dataUrl,
+          tipe: tipe,
+          nama_file: namaWebp
+        });
+      };
+      img.onerror = () => reject(new Error("Gagal memuat gambar"));
+      img.src = e.target?.result as string;
+    };
+    r.onerror = () => reject(r.error || new Error("Gagal membaca file"));
+    r.readAsDataURL(file);
+  });
+}
+
 // ===== Page =====
 export default function ProgresTukangPage() {
   const { user, hasAccess } = useAuth();
@@ -86,6 +153,17 @@ export default function ProgresTukangPage() {
   const [progresData, setProgresData] = useState<ProgresTukang[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+
+  // ===== Lightbox state =====
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxImages, setLightboxImages] = useState<LightboxImage[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
+
+  const openLightbox = (images: LightboxImage[], index = 0) => {
+    setLightboxImages(images);
+    setLightboxIndex(index);
+    setLightboxOpen(true);
+  };
 
   const showToast = useCallback((message: string, type: "success" | "error" = "success") => {
     setToast({ message, type });
@@ -273,7 +351,7 @@ export default function ProgresTukangPage() {
     tanggal: new Date().toISOString().slice(0, 10),
     nominal: 0,
     blok: "",
-    foto: null as null | { nama_file: string; tipe: string; ukuran: number; data_base64: string },
+    fotos: [] as Array<{ nama_file: string; tipe: string; ukuran: number; data_base64: string }>,
   });
 
   const openHistori = (item: ProgresTukang) => {
@@ -282,20 +360,48 @@ export default function ProgresTukangPage() {
       tanggal: new Date().toISOString().slice(0, 10),
       nominal: item.sisa_progres,
       blok: "",
-      foto: null,
+      fotos: [],
     });
   };
 
-  const handleFileUpload = async (file: File | null) => {
-    if (!file) { setProgresForm(f => ({ ...f, foto: null })); return; }
-    if (file.size > 3.5 * 1024 * 1024) { showToast("Ukuran file maksimal 3.5MB (akan disimpan sebagai base64).", "error"); return; }
-    const allowed = ["image/jpeg", "image/jpg", "image/png", "application/pdf"];
-    if (!allowed.includes(file.type)) { showToast("Format file harus JPG/PNG/PDF.", "error"); return; }
-    try {
-      const base64 = await fileToBase64(file);
-      setProgresForm(f => ({ ...f, foto: { nama_file: file.name, tipe: file.type, ukuran: file.size, data_base64: base64 } }));
-    } catch {
-      showToast("Gagal memproses file.", "error");
+  const handleFileUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const newFiles: Array<{ nama_file: string; tipe: string; ukuran: number; data_base64: string }> = [];
+    const errors: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.size > 5 * 1024 * 1024) {
+        errors.push(`${file.name}: Ukuran file maksimal 5MB.`);
+        continue;
+      }
+      const allowed = ["image/jpeg", "image/jpg", "image/png", "application/pdf"];
+      if (!allowed.includes(file.type)) {
+        errors.push(`${file.name}: Format harus JPG/PNG/PDF.`);
+        continue;
+      }
+      try {
+        const compressed = await compressAndConvertToWebp(file);
+        newFiles.push({
+          nama_file: compressed.nama_file,
+          tipe: compressed.tipe,
+          ukuran: file.size,
+          data_base64: compressed.data_base64
+        });
+      } catch (err) {
+        errors.push(`Gagal memproses ${file.name}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      showToast(errors.join(" | "), "error");
+    }
+
+    if (newFiles.length > 0) {
+      setProgresForm(f => ({
+        ...f,
+        fotos: [...f.fotos, ...newFiles]
+      }));
     }
   };
 
@@ -317,11 +423,11 @@ export default function ProgresTukangPage() {
         minggu_ke: (historiItem.histori_progres?.length || 0) + 1,
         nominal: progresForm.nominal,
         blok: blokTrim,
-        foto: progresForm.foto || undefined,
-      });
+        fotos: progresForm.fotos,
+      } as any);
       loadData();
       showToast(`Progres berhasil dicatat!`);
-      setProgresForm({ tanggal: new Date().toISOString().slice(0, 10), nominal: 0, blok: "", foto: null });
+      setProgresForm({ tanggal: new Date().toISOString().slice(0, 10), nominal: 0, blok: "", fotos: [] });
       setHistoriItem(null); // Close modal to reflect fresh data later
     } catch (e: any) {
       showToast(e?.message || "Gagal menyimpan", "error");
@@ -937,11 +1043,63 @@ export default function ProgresTukangPage() {
           {(detailItem.histori_progres || []).length > 0 && (
             <div className="mt-4">
               <p className="text-xs font-semibold mb-2">Histori Progres (5 terakhir)</p>
-              <div className="space-y-1 text-xs">
+              <div className="space-y-1.5 text-xs">
                 {(detailItem.histori_progres || []).slice(-5).reverse().map(h => (
-                  <div key={h.id_progres} className="flex justify-between p-2 rounded bg-muted/50">
-                    <span>Mgg {h.minggu_ke} — {formatDate(h.tanggal)} {h.blok ? `(${h.blok})` : ""}</span>
-                    <span className="font-semibold text-green-700">{progrestukang_formatRupiah(h.nominal)}</span>
+                  <div key={h.id_progres} className="flex flex-col gap-1 p-2 rounded bg-muted/50">
+                    <div className="flex justify-between">
+                      <span>Mgg {h.minggu_ke} — {formatDate(h.tanggal)} {h.blok ? `(${h.blok})` : ""}</span>
+                      <span className="font-semibold text-green-700">{progrestukang_formatRupiah(h.nominal)}</span>
+                    </div>
+                    {((h.fotos && h.fotos.length > 0) || h.foto) && (
+                      <div className="flex flex-wrap gap-1 mt-0.5">
+                        {h.fotos && h.fotos.length > 0 ? (
+                          h.fotos.map((fotoItem, fIdx) => {
+                            const isImage = fotoItem.tipe.startsWith("image/");
+                            const imagesOnly = h.fotos!.filter(f => f.tipe.startsWith("image/")).map(f => ({ src: f.data_base64, alt: f.nama_file }));
+                            return isImage ? (
+                              <button
+                                key={fIdx}
+                                onClick={() => {
+                                  const imgIndex = imagesOnly.findIndex(img => img.src === fotoItem.data_base64);
+                                  openLightbox(imagesOnly, imgIndex >= 0 ? imgIndex : 0);
+                                }}
+                                className="px-1.5 py-0.5 rounded bg-blue-50/80 text-blue-600 hover:bg-blue-100 text-[10px] font-medium flex items-center gap-0.5"
+                                title={fotoItem.nama_file}
+                              >
+                                <ImageIcon className="w-2.5 h-2.5" /> Gbr {fIdx + 1}
+                              </button>
+                            ) : (
+                              <a
+                                key={fIdx}
+                                href={fotoItem.data_base64}
+                                download={fotoItem.nama_file}
+                                className="px-1.5 py-0.5 rounded bg-red-50/80 text-red-600 hover:bg-red-100 text-[10px] font-medium flex items-center gap-0.5"
+                                title={fotoItem.nama_file}
+                              >
+                                <FileText className="w-2.5 h-2.5" /> Dok
+                              </a>
+                            );
+                          })
+                        ) : h.foto ? (
+                          h.foto.tipe.startsWith("image/") ? (
+                            <button
+                              onClick={() => openLightbox([{ src: h.foto!.data_base64, alt: h.foto!.nama_file }])}
+                              className="px-1.5 py-0.5 rounded bg-blue-50/80 text-blue-600 hover:bg-blue-100 text-[10px] font-medium flex items-center gap-0.5"
+                            >
+                              <ImageIcon className="w-2.5 h-2.5" /> Lihat
+                            </button>
+                          ) : (
+                            <a
+                              href={h.foto.data_base64}
+                              download={h.foto.nama_file}
+                              className="px-1.5 py-0.5 rounded bg-red-50/80 text-red-600 hover:bg-red-100 text-[10px] font-medium flex items-center gap-0.5"
+                            >
+                              <FileText className="w-2.5 h-2.5" /> Dok
+                            </a>
+                          )
+                        ) : null}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1008,17 +1166,56 @@ export default function ProgresTukangPage() {
                         <td className="px-2 py-1.5 font-semibold text-green-700">{progrestukang_formatRupiah(h.nominal)}</td>
                         <td className="px-2 py-1.5" title={h.blok || ""}>{blokDisplay}</td>
                         <td className="px-2 py-1.5">
-                          {h.foto ? (
+                          {h.fotos && h.fotos.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {h.fotos.map((fotoItem, fIdx) => {
+                                const isImage = fotoItem.tipe.startsWith("image/");
+                                const imagesOnly = h.fotos!.filter(f => f.tipe.startsWith("image/")).map(f => ({ src: f.data_base64, alt: f.nama_file }));
+                                return isImage ? (
+                                  <button
+                                    key={fIdx}
+                                    onClick={() => {
+                                      const imgIndex = imagesOnly.findIndex(img => img.src === fotoItem.data_base64);
+                                      openLightbox(imagesOnly, imgIndex >= 0 ? imgIndex : 0);
+                                    }}
+                                    className="p-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center gap-0.5 text-[10px] font-medium"
+                                    title={fotoItem.nama_file}
+                                  >
+                                    <ImageIcon className="w-3 h-3" /> Gbr {fIdx + 1}
+                                  </button>
+                                ) : (
+                                  <a
+                                    key={fIdx}
+                                    href={fotoItem.data_base64}
+                                    download={fotoItem.nama_file}
+                                    className="p-1 rounded bg-red-50 text-red-600 hover:bg-red-100 flex items-center gap-0.5 text-[10px] font-medium"
+                                    title={fotoItem.nama_file}
+                                  >
+                                    <FileText className="w-3 h-3" /> Dok
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          ) : h.foto ? (
                             h.foto.tipe.startsWith("image/") ? (
-                              <a href={h.foto.data_base64} target="_blank" rel="noreferrer" className="text-blue-600 underline flex items-center gap-1">
+                              <button
+                                onClick={() => openLightbox([{ src: h.foto!.data_base64, alt: h.foto!.nama_file }])}
+                                className="p-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100 flex items-center gap-0.5 text-[10px] font-medium"
+                              >
                                 <ImageIcon className="w-3 h-3" /> Lihat
-                              </a>
+                              </button>
                             ) : (
-                              <a href={h.foto.data_base64} download={h.foto.nama_file} className="text-blue-600 underline flex items-center gap-1">
+                              <a
+                                href={h.foto.data_base64}
+                                download={h.foto.nama_file}
+                                className="p-1 rounded bg-red-50 text-red-600 hover:bg-red-100 flex items-center gap-0.5 text-[10px] font-medium"
+                              >
                                 <FileText className="w-3 h-3" /> Dok
                               </a>
                             )
-                          ) : "—"}
+                          ) : (
+                            "—"
+                          )}
                         </td>
                         <td className="px-2 py-1.5">
                           {canEdit && (
@@ -1082,12 +1279,35 @@ export default function ProgresTukangPage() {
                     data-testid="progres-input-blok" />
                   <p className="text-xs text-muted-foreground mt-1">Isi dengan kode blok yang dikerjakan pada minggu ini.</p>
                 </Field>
-                <Field label="Foto / Dokumen (opsional, JPG/PNG/PDF, maks 3.5MB)" className="md:col-span-2">
+                <Field label="Foto / Dokumen (opsional, JPG/PNG/PDF, maks 5MB per file, bisa pilih beberapa)" className="md:col-span-2">
                   <input type="file" accept=".jpg,.jpeg,.png,.pdf,image/*,application/pdf"
-                    onChange={e => handleFileUpload(e.target.files?.[0] || null)}
+                    multiple
+                    onChange={e => handleFileUpload(e.target.files)}
                     className="w-full text-xs" />
-                  {progresForm.foto && (
-                    <p className="text-xs text-green-700 mt-1">📎 {progresForm.foto.nama_file} ({Math.round(progresForm.foto.ukuran / 1024)} KB)</p>
+                  {progresForm.fotos && progresForm.fotos.length > 0 && (
+                    <div className="mt-2 space-y-1.5">
+                      {progresForm.fotos.map((item, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-2 rounded-xl bg-muted/40 border border-border text-xs">
+                          <div className="flex items-center gap-2 truncate">
+                            {item.tipe.startsWith("image/") ? (
+                              <img src={item.data_base64} alt={item.nama_file} className="w-8 h-8 rounded object-cover shrink-0" />
+                            ) : (
+                              <FileText className="w-8 h-8 text-red-500 p-1 shrink-0" />
+                            )}
+                            <span className="truncate font-medium text-foreground" title={item.nama_file}>{item.nama_file}</span>
+                            <span className="text-[10px] text-muted-foreground shrink-0">({Math.round(item.ukuran / 1024)} KB)</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setProgresForm(f => ({ ...f, fotos: f.fotos.filter((_, i) => i !== idx) }))}
+                            className="p-1 rounded hover:bg-red-50 text-red-500 hover:text-red-700 transition-colors"
+                            title="Hapus"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </Field>
               </div>
@@ -1191,6 +1411,13 @@ export default function ProgresTukangPage() {
           </div>
         </ModalShell>
       )}
+      {/* Lightbox Overlay */}
+      <ImageLightbox
+        images={lightboxImages}
+        initialIndex={lightboxIndex}
+        open={lightboxOpen}
+        onClose={() => setLightboxOpen(false)}
+      />
     </div>
   );
 }

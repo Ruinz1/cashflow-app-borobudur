@@ -10,11 +10,12 @@ import { exportToPDF, exportToExcel } from "@/lib/exportUtils";
 import {
   Plus, Pencil, Trash2, FileText, Printer,
   Eye, AlertCircle, TrendingUp, TrendingDown, Wallet, FileSpreadsheet,
-  RefreshCw, Users, PlusCircle, X, Settings, UploadCloud,
+  RefreshCw, Users, PlusCircle, X, Settings, UploadCloud, Image as ImageIcon,
 } from "lucide-react";
 import ImportDokumenModal from "@/components/ImportDokumenModal";
 import ImportDokumenSection from "@/components/ImportDokumenSection";
 import NotaUploader from "@/components/NotaUploader";
+import ImageLightbox, { type LightboxImage } from "@/components/ImageLightbox";
 
 const MONTHS = [
   { val: "", label: "Semua Bulan" },
@@ -83,6 +84,11 @@ export default function DivisiPage() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   }, []);
+
+  // Lightbox state
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [lightboxImages, setLightboxImages] = useState<LightboxImage[]>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
 
   const isTKYaris = divisi === "tkyaris";
   const isImportable = divisi === "amanah" || divisi === "batualam";
@@ -267,7 +273,7 @@ export default function DivisiPage() {
     }
   };
 
-  const handleViewNota = async (nota: NotaItem) => {
+  const handleViewNota = async (nota: NotaItem, allNotas?: NotaItem[], clickedIndex?: number) => {
     let dataStr = nota.data;
     if (!dataStr) {
       try {
@@ -281,8 +287,26 @@ export default function DivisiPage() {
     if (!dataStr) return;
 
     if (nota.tipe.startsWith("image/")) {
-      const win = window.open();
-      win?.document.write(`<img src="${dataStr}" style="max-width:100%;"/>`);
+      // Build lightbox images from all image notas in this transaction
+      const imageList = allNotas
+        ? allNotas.filter(n => n.tipe.startsWith("image/") && n.data)
+        : [nota];
+      const images: LightboxImage[] = imageList.map(n => ({
+        src: n.data || dataStr!,
+        alt: n.nama,
+      }));
+      // Find index of clicked image in the filtered list
+      const idx = clickedIndex !== undefined
+        ? imageList.findIndex((_, i) => {
+            const imageOnlyIndex = allNotas
+              ? allNotas.filter(n => n.tipe.startsWith("image/")).indexOf(imageList[i])
+              : 0;
+            return imageOnlyIndex === clickedIndex;
+          })
+        : 0;
+      setLightboxImages(images);
+      setLightboxIndex(Math.max(0, idx));
+      setLightboxOpen(true);
     } else {
       const link = document.createElement("a");
       link.href = dataStr;
@@ -770,13 +794,43 @@ export default function DivisiPage() {
                       {(() => {
                         const notaList = (t.notas && t.notas.length > 0) ? t.notas : (t.nota ? [t.nota] : []);
                         if (!notaList.length) return <span className="text-muted-foreground text-xs">-</span>;
+                        const imageNotaList = notaList.filter(n => n.tipe.startsWith("image/"));
+                        const fileNotaList = notaList.filter(n => !n.tipe.startsWith("image/"));
                         return (
-                          <div className="flex flex-col gap-1">
-                            {notaList.map((n, i) => (
-                              <button key={i} onClick={() => handleViewNota(n)}
+                          <div className="flex flex-col gap-1.5">
+                            {imageNotaList.length > 0 && (
+                              <div className="flex gap-1">
+                                {imageNotaList.map((n, imgIdx) => (
+                                  <button
+                                    key={imgIdx}
+                                    type="button"
+                                    onClick={() => {
+                                      const images: LightboxImage[] = imageNotaList
+                                        .filter(img => img.data)
+                                        .map(img => ({ src: img.data, alt: img.nama }));
+                                      setLightboxImages(images);
+                                      setLightboxIndex(imgIdx);
+                                      setLightboxOpen(true);
+                                    }}
+                                    className="w-8 h-8 rounded-lg overflow-hidden border border-border hover:border-primary transition-colors"
+                                    title={n.nama}
+                                  >
+                                    {n.data ? (
+                                      <img src={n.data} alt={n.nama} className="w-full h-full object-cover" />
+                                    ) : (
+                                      <div className="w-full h-full flex items-center justify-center bg-muted">
+                                        <ImageIcon className="w-3 h-3 text-muted-foreground" />
+                                      </div>
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            {fileNotaList.map((n, i) => (
+                              <button key={`f-${i}`} onClick={() => handleViewNota(n)}
                                 className="flex items-center gap-1 text-xs text-blue-500 hover:underline text-left"
                                 title={n.nama}>
-                                <Eye className="w-3 h-3 shrink-0" />
+                                <FileText className="w-3 h-3 shrink-0" />
                                 <span className="truncate max-w-[90px]">{n.nama}</span>
                               </button>
                             ))}
@@ -921,6 +975,14 @@ export default function DivisiPage() {
           </div>
         </div>
       )}
+
+      {/* Image Lightbox */}
+      <ImageLightbox
+        images={lightboxImages}
+        initialIndex={lightboxIndex}
+        open={lightboxOpen}
+        onClose={() => setLightboxOpen(false)}
+      />
     </div>
   );
 }

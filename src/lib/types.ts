@@ -146,6 +146,7 @@ export interface HistoriProgres {
   nominal: number;
   blok: string;
   foto?: { nama_file: string; tipe: string; ukuran: number; data_base64: string } | null;
+  fotos?: Array<{ nama_file: string; tipe: string; ukuran: number; data_base64: string }> | null;
 }
 
 export interface ProgresTukang {
