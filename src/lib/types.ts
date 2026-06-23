@@ -8,6 +8,7 @@ export interface User {
 }
 
 export interface NotaItem {
+  id?: string;
   nama: string;
   tipe: string;
   data: string;

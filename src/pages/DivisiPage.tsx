@@ -32,6 +32,65 @@ function generateYears() {
   return [{ val: "", label: "Semua Tahun" }, ...Array.from({ length: 5 }, (_, i) => ({ val: String(now - i), label: String(now - i) }))];
 }
 
+// ===== Nota Thumbnail (Asynchronous Loader) =====
+interface NotaThumbnailProps {
+  nota: NotaItem;
+  onClick: (fullData: string) => void;
+}
+
+function NotaThumbnail({ nota, onClick }: NotaThumbnailProps) {
+  const [data, setData] = useState<string | null>(nota.data || null);
+  const [loading, setLoading] = useState(!nota.data);
+
+  useEffect(() => {
+    if (nota.data) {
+      setData(nota.data);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    transaksiApi.getNota(nota.id!)
+      .then(res => {
+        if (active) {
+          setData(res.data);
+          nota.data = res.data;
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [nota]);
+
+  if (loading) {
+    return (
+      <div className="w-8 h-8 rounded-lg border border-border flex items-center justify-center bg-muted animate-pulse shrink-0">
+        <div className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="w-8 h-8 rounded-lg border border-border flex items-center justify-center bg-muted shrink-0">
+        <ImageIcon className="w-3 h-3 text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(data)}
+      className="w-8 h-8 rounded-lg overflow-hidden border border-border hover:border-primary transition-colors cursor-pointer shrink-0"
+      title={nota.nama}
+    >
+      <img src={data} alt={nota.nama} className="w-full h-full object-cover" />
+    </button>
+  );
+}
+
 const EMPTY_FORM = { tanggal: "", uraian: "", rencana: 0, uang_masuk: 0, uang_keluar: 0, keterangan: "", nota: null as null | NotaItem, notas: [] as NotaItem[] };
 
 function ConfirmDialog({ message, onConfirm, onCancel }: { message: string; onConfirm: () => void; onCancel: () => void }) {
@@ -801,28 +860,20 @@ export default function DivisiPage() {
                             {imageNotaList.length > 0 && (
                               <div className="flex gap-1">
                                 {imageNotaList.map((n, imgIdx) => (
-                                  <button
-                                    key={imgIdx}
-                                    type="button"
-                                    onClick={() => {
-                                      const images: LightboxImage[] = imageNotaList
-                                        .filter(img => img.data)
-                                        .map(img => ({ src: img.data, alt: img.nama }));
+                                  <NotaThumbnail
+                                    key={n.id || imgIdx}
+                                    nota={n}
+                                    onClick={(fullData) => {
+                                      const images = imageNotaList
+                                        .map(img => ({ src: img.data || (img.id === n.id ? fullData : ""), alt: img.nama }))
+                                        .filter(img => img.src);
+                                      
+                                      const idx = images.findIndex(img => img.src === fullData);
                                       setLightboxImages(images);
-                                      setLightboxIndex(imgIdx);
+                                      setLightboxIndex(idx >= 0 ? idx : 0);
                                       setLightboxOpen(true);
                                     }}
-                                    className="w-8 h-8 rounded-lg overflow-hidden border border-border hover:border-primary transition-colors"
-                                    title={n.nama}
-                                  >
-                                    {n.data ? (
-                                      <img src={n.data} alt={n.nama} className="w-full h-full object-cover" />
-                                    ) : (
-                                      <div className="w-full h-full flex items-center justify-center bg-muted">
-                                        <ImageIcon className="w-3 h-3 text-muted-foreground" />
-                                      </div>
-                                    )}
-                                  </button>
+                                  />
                                 ))}
                               </div>
                             )}
